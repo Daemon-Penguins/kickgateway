@@ -1,0 +1,43 @@
+@using Microsoft.AspNetCore.Components.Web
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <title>Kick Gateway Admin</title>
+    <link rel="stylesheet" href="_content/Microsoft.AspNetCore.Components.Web/style.css" />
+    <HeadOutlet @rendermode="@InteractiveServer" />
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #0e1116; color: #e6e9ef; }
+        nav { background: #1a1f29; padding: 0.7rem 1.2rem; border-bottom: 1px solid #2a3140; }
+        nav a { color: #99b1ff; margin-right: 1.2rem; text-decoration: none; font-weight: 500; }
+        nav a:hover { color: #cdd6ff; }
+        main { max-width: 1200px; margin: 1.5rem auto; padding: 0 1rem; }
+        h1, h2, h3 { color: #fff; }
+        table { width: 100%; border-collapse: collapse; background: #161b23; border: 1px solid #2a3140; border-radius: 8px; overflow: hidden; }
+        th, td { padding: 0.6rem 0.8rem; text-align: left; border-bottom: 1px solid #2a3140; font-size: 0.9rem; vertical-align: top; }
+        th { background: #1f2530; color: #9aa4b6; font-weight: 600; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.05em; }
+        tr:last-child td { border-bottom: none; }
+        button { background: #4f6df0; color: #fff; border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer; font-size: 0.85rem; margin-right: 0.3rem; }
+        button:hover { background: #6584ff; }
+        button.secondary { background: #2a3140; }
+        button.danger { background: #c04040; }
+        input, select { background: #1f2530; color: #e6e9ef; border: 1px solid #2a3140; padding: 0.4rem 0.6rem; border-radius: 4px; font-size: 0.9rem; }
+        input:focus, select:focus { outline: 1px solid #4f6df0; }
+        form > label { display: block; margin: 0.4rem 0 0.8rem; }
+        form > label > span { display: block; font-size: 0.8rem; color: #9aa4b6; margin-bottom: 0.2rem; }
+        form > label input { width: 100%; box-sizing: border-box; }
+        .card { background: #161b23; border: 1px solid #2a3140; border-radius: 8px; padding: 1.2rem; margin-bottom: 1.2rem; }
+        .pill { display: inline-block; padding: 0.15rem 0.55rem; border-radius: 999px; font-size: 0.72rem; font-weight: 600; background: #2a3140; color: #cdd6ff; }
+        .pill.green { background: #1e4d2e; color: #b3f0c0; }
+        .pill.red { background: #4d1e1e; color: #f0b3b3; }
+        .muted { color: #6b7689; font-size: 0.8rem; }
+        a { color: #99b1ff; }
+    </style>
+</head>
+<body>
+    <Routes @rendermode="@InteractiveServer" />
+    <script src="_framework/blazor.web.js"></script>
+</body>
+</html>

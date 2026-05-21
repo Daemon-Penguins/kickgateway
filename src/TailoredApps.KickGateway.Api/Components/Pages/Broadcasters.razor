@@ -1,0 +1,116 @@
+@page "/admin/broadcasters"
+@inject IDbContextFactory<KickGatewayDbContext> DbFactory
+@inject NavigationManager Nav
+
+<h1>Broadcasters</h1>
+<p class="muted">Each row is one Kick channel connected under one client app. Use "Connect" to begin a fresh OAuth flow for a channel.</p>
+
+<div class="card">
+    <h3>Connect a broadcaster</h3>
+    @if (_clientChoices is null || _clientChoices.Count == 0)
+    {
+        <p class="muted">Add a client app first.</p>
+    }
+    else
+    {
+        <label><span>Client app</span>
+            <select @bind="_chosenClientId">
+                @foreach (var c in _clientChoices)
+                {
+                    <option value="@c.Id">@c.Name (@c.ClientId)</option>
+                }
+            </select>
+        </label>
+        <button @onclick="StartConnect">Start OAuth</button>
+        <p class="muted">Opens Kick's consent screen for the selected client app. After approval you're redirected back and a broadcaster row appears below.</p>
+    }
+</div>
+
+<div class="card">
+    <h3>Connected broadcasters</h3>
+    @if (_rows is null)
+    {
+        <p>Loading…</p>
+    }
+    else if (_rows.Count == 0)
+    {
+        <p class="muted">None yet.</p>
+    }
+    else
+    {
+        <table>
+            <thead>
+                <tr><th>Channel</th><th>Client app</th><th>Subscriptions</th><th>Token expires</th><th>Status</th><th></th></tr>
+            </thead>
+            <tbody>
+            @foreach (var b in _rows)
+            {
+                <tr>
+                    <td><strong>@b.Username</strong><br /><span class="muted">@b.KickUserId · @b.ChannelSlug</span></td>
+                    <td>@b.KickClientApp?.Name</td>
+                    <td>@b.Subscriptions.Count</td>
+                    <td><span class="muted">@b.AccessTokenExpiresAt.ToString("u")</span></td>
+                    <td>@(b.IsEnabled ? new MarkupString("<span class='pill green'>enabled</span>") : new MarkupString("<span class='pill red'>disabled</span>"))</td>
+                    <td>
+                        <button @onclick="() => Enroll(b.Id)">Enroll all events</button>
+                        <button class="secondary" @onclick="() => Toggle(b.Id)">@(b.IsEnabled ? "Disable" : "Enable")</button>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    }
+</div>
+
+@if (!string.IsNullOrEmpty(_lastEnrollResult))
+{
+    <div class="card">
+        <h3>Last enrollment result</h3>
+        <pre style="background:#0e1116;color:#cdd6ff;padding:0.8rem;border-radius:4px;font-size:0.8rem;overflow:auto;">@_lastEnrollResult</pre>
+    </div>
+}
+
+@code {
+    List<KickBroadcasterAccount>? _rows;
+    List<KickClientApp>? _clientChoices;
+    Guid _chosenClientId;
+    string? _lastEnrollResult;
+
+    [Inject] IHttpClientFactory Http { get; set; } = default!;
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    async Task Reload()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _clientChoices = await db.ClientApps.Where(x => x.IsEnabled).OrderBy(x => x.Name).ToListAsync();
+        if (_chosenClientId == Guid.Empty && _clientChoices.Count > 0) _chosenClientId = _clientChoices[0].Id;
+        _rows = await db.Broadcasters.Include(x => x.KickClientApp).Include(x => x.Subscriptions).OrderBy(x => x.Username).ToListAsync();
+    }
+
+    void StartConnect()
+    {
+        if (_chosenClientId == Guid.Empty) return;
+        Nav.NavigateTo($"/api/auth/kick/start?clientAppId={_chosenClientId}", forceLoad: true);
+    }
+
+    async Task Toggle(Guid id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var b = await db.Broadcasters.FindAsync(id);
+        if (b is null) return;
+        b.IsEnabled = !b.IsEnabled;
+        b.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        await Reload();
+    }
+
+    async Task Enroll(Guid id)
+    {
+        var http = Http.CreateClient();
+        http.BaseAddress = new Uri(Nav.BaseUri);
+        var resp = await http.PostAsync($"/api/subscriptions/{id}/enroll", null);
+        _lastEnrollResult = await resp.Content.ReadAsStringAsync();
+        await Reload();
+    }
+}

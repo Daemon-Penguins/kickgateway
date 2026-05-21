@@ -1,0 +1,14 @@
+**/bin
+**/obj
+**/.vs
+**/.idea
+**/.git
+**/.github
+**/.claude
+docker/
+*.user
+appsettings.Development.json
+appsettings.local.json
+.env
+README.md
+CLAUDE.md

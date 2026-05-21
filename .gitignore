@@ -1,0 +1,18 @@
+bin/
+obj/
+*.user
+.vs/
+.idea/
+*.swp
+appsettings.Development.json
+appsettings.local.json
+.env
+
+# Obsidian per-user state — keep app.json / appearance.json / core-plugins.json
+# / graph.json / templates.json checked in; ignore per-user workspace + cache.
+docs/.obsidian/workspace.json
+docs/.obsidian/workspace-mobile.json
+docs/.obsidian/workspaces.json
+docs/.obsidian/cache
+docs/.obsidian/plugins/*/data.json
+docs/.trash/

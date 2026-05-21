@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PackageId>TailoredApps.Integrations.Kick</PackageId>
+    <Description>Kick.com public API client: OAuth (PKCE), event subscriptions, webhook signature verification. Multi-client / multi-token aware.</Description>
+    <Version>0.1.0</Version>
+    <RootNamespace>TailoredApps.Integrations.Kick</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.*" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.*" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.*" />
+  </ItemGroup>
+</Project>

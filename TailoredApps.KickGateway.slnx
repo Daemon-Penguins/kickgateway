@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TailoredApps.Integrations.Kick/TailoredApps.Integrations.Kick.csproj" />
+    <Project Path="src/TailoredApps.KickGateway.Api/TailoredApps.KickGateway.Api.csproj" />
+    <Project Path="src/TailoredApps.KickGateway.AppHost/TailoredApps.KickGateway.AppHost.csproj" />
+    <Project Path="src/TailoredApps.KickGateway.Contracts/TailoredApps.KickGateway.Contracts.csproj" />
+    <Project Path="src/TailoredApps.KickGateway.ServiceDefaults/TailoredApps.KickGateway.ServiceDefaults.csproj" />
+    <Project Path="src/TailoredApps.KickGateway.Worker/TailoredApps.KickGateway.Worker.csproj" />
+  </Folder>
+</Solution>

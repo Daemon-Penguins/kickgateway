@@ -1,0 +1,28 @@
+@page "/"
+@page "/admin"
+@inject IDbContextFactory<KickGatewayDbContext> DbFactory
+
+<h1>Kick Gateway Admin</h1>
+
+<div class="card">
+    <h3>State</h3>
+    <p class="muted">@_clientCount client app(s) configured · @_broadcasterCount broadcaster account(s) · @_subscriptionCount event subscription(s)</p>
+    <p>Begin by adding a <a href="/admin/clients">client app</a> (ClientId/Secret/RedirectUri from the Kick developer portal), then connect broadcasters under it on the <a href="/admin/broadcasters">Broadcasters</a> page.</p>
+</div>
+
+<div class="card">
+    <h3>Webhook receiver</h3>
+    <p class="muted">POST <code>/api/webhooks/kick</code> — set this URL on every client app in the Kick dev portal.</p>
+</div>
+
+@code {
+    int _clientCount, _broadcasterCount, _subscriptionCount;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _clientCount = await db.ClientApps.CountAsync();
+        _broadcasterCount = await db.Broadcasters.CountAsync();
+        _subscriptionCount = await db.EventSubscriptions.CountAsync();
+    }
+}

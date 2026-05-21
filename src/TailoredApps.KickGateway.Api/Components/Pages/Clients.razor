@@ -1,0 +1,116 @@
+@page "/admin/clients"
+@inject IDbContextFactory<KickGatewayDbContext> DbFactory
+
+<h1>Client apps</h1>
+<p class="muted">Each row is one Kick developer application. ClientId / ClientSecret / RedirectUri come from <a href="https://kick.com/settings/developer" target="_blank">kick.com/settings/developer</a>. WebhookUrl is what you configured there — stored here for diagnostics only.</p>
+
+<div class="card">
+    <h3>Add client app</h3>
+    <EditForm Model="_new" OnValidSubmit="OnSubmit" FormName="newClient">
+        <label><span>Name</span><InputText @bind-Value="_new.Name" /></label>
+        <label><span>Client ID</span><InputText @bind-Value="_new.ClientId" /></label>
+        <label><span>Client Secret</span><InputText type="password" @bind-Value="_new.ClientSecret" /></label>
+        <label><span>Redirect URI (matches portal)</span><InputText @bind-Value="_new.RedirectUri" /></label>
+        <label><span>Webhook URL (matches portal)</span><InputText @bind-Value="_new.WebhookUrl" /></label>
+        <label><span>Scopes</span><InputText @bind-Value="_new.Scopes" /></label>
+        <button type="submit">Add client</button>
+    </EditForm>
+</div>
+
+<div class="card">
+    <h3>Configured clients</h3>
+    @if (_apps is null)
+    {
+        <p>Loading…</p>
+    }
+    else if (_apps.Count == 0)
+    {
+        <p class="muted">None yet.</p>
+    }
+    else
+    {
+        <table>
+            <thead>
+                <tr><th>Name</th><th>Client ID</th><th>Redirect</th><th>Webhook</th><th>Enabled</th><th></th></tr>
+            </thead>
+            <tbody>
+            @foreach (var app in _apps)
+            {
+                <tr>
+                    <td>@app.Name</td>
+                    <td><code>@app.ClientId</code></td>
+                    <td><span class="muted">@app.RedirectUri</span></td>
+                    <td><span class="muted">@app.WebhookUrl</span></td>
+                    <td>@(app.IsEnabled ? new MarkupString("<span class='pill green'>enabled</span>") : new MarkupString("<span class='pill red'>disabled</span>"))</td>
+                    <td>
+                        <button class="secondary" @onclick="() => Toggle(app.Id)">@(app.IsEnabled ? "Disable" : "Enable")</button>
+                        <button class="danger" @onclick="() => Delete(app.Id)">Delete</button>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    }
+</div>
+
+@code {
+    List<KickClientApp>? _apps;
+    NewClient _new = new();
+
+    class NewClient
+    {
+        public string Name { get; set; } = "";
+        public string ClientId { get; set; } = "";
+        public string ClientSecret { get; set; } = "";
+        public string RedirectUri { get; set; } = "";
+        public string WebhookUrl { get; set; } = "";
+        public string Scopes { get; set; } = "events:subscribe channel:read channel:write user:read chat:write streamkey:read moderation:ban";
+    }
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    async Task Reload()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _apps = await db.ClientApps.OrderBy(x => x.Name).ToListAsync();
+    }
+
+    async Task OnSubmit()
+    {
+        if (string.IsNullOrWhiteSpace(_new.Name) || string.IsNullOrWhiteSpace(_new.ClientId)) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.ClientApps.Add(new KickClientApp
+        {
+            Name = _new.Name.Trim(),
+            ClientId = _new.ClientId.Trim(),
+            ClientSecret = _new.ClientSecret.Trim(),
+            RedirectUri = _new.RedirectUri.Trim(),
+            WebhookUrl = _new.WebhookUrl.Trim(),
+            Scopes = _new.Scopes.Trim(),
+        });
+        await db.SaveChangesAsync();
+        _new = new();
+        await Reload();
+    }
+
+    async Task Toggle(Guid id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var app = await db.ClientApps.FindAsync(id);
+        if (app is null) return;
+        app.IsEnabled = !app.IsEnabled;
+        app.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        await Reload();
+    }
+
+    async Task Delete(Guid id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var app = await db.ClientApps.FindAsync(id);
+        if (app is null) return;
+        db.ClientApps.Remove(app);
+        await db.SaveChangesAsync();
+        await Reload();
+    }
+}

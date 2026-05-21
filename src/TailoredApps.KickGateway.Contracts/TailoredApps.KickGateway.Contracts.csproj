@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PackageId>TailoredApps.KickGateway.Contracts</PackageId>
+    <Description>MassTransit message contracts published by the Kick Gateway. Shared between gateway (publisher) and downstream subscribers.</Description>
+    <Version>0.1.0</Version>
+    <RootNamespace>TailoredApps.KickGateway.Contracts</RootNamespace>
+  </PropertyGroup>
+</Project>

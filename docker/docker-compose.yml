@@ -1,0 +1,30 @@
+services:
+  rabbitmq:
+    # `3.13-management` resolves to 4.x on Docker Hub and crashes on first
+    # boot (Khepri vs Mnesia). Pin the explicit minor that worked on hq-config.
+    image: rabbitmq:4.3-management
+    container_name: kickgw-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: kickgw-sqlserver
+    ports:
+      - "1433:1433"
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "YourStrong!Passw0rd"
+      MSSQL_PID: "Express"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+
+volumes:
+  rabbitmq-data:
+  sqlserver-data:
