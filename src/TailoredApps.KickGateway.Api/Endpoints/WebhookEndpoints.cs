@@ -66,6 +66,8 @@ public static class WebhookEndpoints
                 .Include(x => x.KickClientApp)
                 .FirstOrDefaultAsync(x => x.KickUserId == broadcasterUserId, ct);
 
+            var kickHeaders = SerializeKickHeaders(headers);
+
             if (broadcaster is null)
             {
                 log.LogWarning("Received {Type} webhook for unknown broadcaster_user_id={Bid} (mid={Mid}) — recording and dropping",
@@ -77,7 +79,9 @@ public static class WebhookEndpoints
                     SubscriptionId = subscriptionId,
                     BroadcasterAccountId = null,
                     ReceivedAt = DateTime.UtcNow,
-                    PublishedAt = null
+                    PublishedAt = null,
+                    RawBody = body,
+                    Headers = kickHeaders
                 });
                 await db.SaveChangesAsync(ct);
                 return Results.Ok();
@@ -100,7 +104,9 @@ public static class WebhookEndpoints
                 SubscriptionId = subscriptionId,
                 BroadcasterAccountId = broadcaster.Id,
                 ReceivedAt = receivedAt,
-                PublishedAt = receivedAt
+                PublishedAt = receivedAt,
+                RawBody = body,
+                Headers = kickHeaders
             });
 
             try
@@ -139,6 +145,23 @@ public static class WebhookEndpoints
             return "";
         }
         catch { return ""; }
+    }
+
+    /// <summary>
+    /// Pulls just the Kick-Event-* headers plus Content-Type. Skips user-agent, CDN
+    /// noise, and anything that could carry secrets we don't need long-term.
+    /// </summary>
+    private static string SerializeKickHeaders(IHeaderDictionary headers)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var (key, value) in headers)
+        {
+            if (!key.StartsWith("Kick-Event-", StringComparison.OrdinalIgnoreCase)
+                && !key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase))
+                continue;
+            sb.Append(key).Append(": ").Append(value.ToString()).Append('\n');
+        }
+        return sb.ToString();
     }
 
     private static bool IsUniqueViolation(DbUpdateException ex)

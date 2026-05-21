@@ -157,4 +157,10 @@ public class ReceivedWebhook
     public DateTime ReceivedAt { get; set; } = DateTime.UtcNow;
 
     public DateTime? PublishedAt { get; set; }
+
+    /// <summary>Raw request body as Kick sent it. Verbatim string used for signature verification — kept here so we can re-inspect what arrived even after the outbox row has shipped to RabbitMQ and been deleted.</summary>
+    public string RawBody { get; set; } = "";
+
+    /// <summary>HTTP headers Kick attached, joined as `Name: Value\n…`. Skipped for the unknown-broadcaster drop path (set on signature-verified deliveries only).</summary>
+    public string? Headers { get; set; }
 }
