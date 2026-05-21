@@ -41,6 +41,9 @@ public static class OAuthEndpoints
             return Results.Redirect(url);
         });
 
+        // Anonymous — Kick redirects the user back to this URL after consent, and
+        // the user may have lost their admin cookie session by then. Validation is
+        // the one-shot PKCE state lookup; no need for an admin cookie here.
         routes.MapGet("/api/auth/kick/callback", async (
             string? code,
             string? state,
@@ -106,7 +109,7 @@ public static class OAuthEndpoints
             // No per-broadcaster detail page yet — drop the user back on the list,
             // where the freshly connected row appears at the top.
             return Results.Redirect("/admin/broadcasters");
-        });
+        }).AllowAnonymous();
 
         return routes;
     }

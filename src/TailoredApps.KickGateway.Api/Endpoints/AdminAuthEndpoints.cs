@@ -15,8 +15,13 @@ public static class AdminAuthEndpoints
     public static IEndpointRouteBuilder MapAdminAuthEndpoints(this IEndpointRouteBuilder routes)
     {
         // Start: kick off PKCE against the KickClientApp marked IsAdminLoginClient.
+        // We use a DIFFERENT redirect_uri than the broadcaster connect flow so the
+        // two never share state. Kick dev portal must allow BOTH URIs for the same
+        // client id: the broadcaster one (app.RedirectUri, hits /api/auth/kick/callback)
+        // and the admin one (https://<host>/api/auth/admin/callback).
         routes.MapGet("/api/auth/admin/login", async (
             string? returnUrl,
+            HttpContext http,
             KickGatewayDbContext db,
             PkceStateStore pkce,
             IOptions<KickGlobalDefaults> defaults,
@@ -26,16 +31,16 @@ public static class AdminAuthEndpoints
                 .FirstOrDefaultAsync(x => x.IsAdminLoginClient && x.IsEnabled, ct);
             if (app is null) return Results.BadRequest(new { error = "no admin login client configured — mark a KickClientApp as IsAdminLoginClient" });
 
-            // Flow tag carries the post-login redirect so we don't need a side
-            // table or signed cookie. Sanitized to local paths only on callback.
             var flowTag = "admin:" + (string.IsNullOrEmpty(returnUrl) ? "/admin" : returnUrl);
             var challenge = PkceHelper.Create(flow: flowTag);
             await pkce.SaveAsync(challenge, app.Id, ct);
 
+            var adminRedirect = $"{http.Request.Scheme}://{http.Request.Host}/api/auth/admin/callback";
+
             var url = PkceHelper.BuildAuthorizationUrl(
                 authBaseUrl: defaults.Value.AuthBaseUrl,
                 clientId: app.ClientId,
-                redirectUri: app.RedirectUri,
+                redirectUri: adminRedirect,
                 scopes: "user:read",
                 pkce: challenge);
             return Results.Redirect(url);
@@ -69,8 +74,13 @@ public static class AdminAuthEndpoints
             if (!app.IsAdminLoginClient)
                 return Results.BadRequest(new { error = "state was issued by a non-admin client" });
 
+            // redirect_uri on the token-exchange request must EXACTLY match what we
+            // sent on /authorize. We compute it from the same request so behind a
+            // reverse proxy the host/scheme are the proxied ones.
+            var adminRedirect = $"{http.Request.Scheme}://{http.Request.Host}/api/auth/admin/callback";
+
             var tokens = await kick.ExchangeAuthorizationCodeAsync(
-                app.ClientId, app.ClientSecret, code!, entry.CodeVerifier, app.RedirectUri, ct);
+                app.ClientId, app.ClientSecret, code!, entry.CodeVerifier, adminRedirect, ct);
             if (!tokens.Success || tokens.AccessToken is null)
                 return Results.BadRequest(new { error = "token exchange failed", detail = tokens.Error });
 
