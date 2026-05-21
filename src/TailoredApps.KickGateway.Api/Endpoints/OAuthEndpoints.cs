@@ -98,7 +98,9 @@ public static class OAuthEndpoints
 
             await db.SaveChangesAsync(ct);
 
-            return Results.Redirect($"/admin/broadcasters/{existing.Id}");
+            // No per-broadcaster detail page yet — drop the user back on the list,
+            // where the freshly connected row appears at the top.
+            return Results.Redirect("/admin/broadcasters");
         });
 
         return routes;
