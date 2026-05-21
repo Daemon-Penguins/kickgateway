@@ -27,6 +27,7 @@ builder.Services.AddDbContextFactory<KickGatewayDbContext>(opts =>
 // === Domain services ===
 builder.Services.AddScoped<PkceStateStore>();
 builder.Services.AddScoped<BroadcasterTokenService>();
+builder.Services.AddScoped<SubscriptionEnrollmentService>();
 builder.Services.AddScoped<KickWebhookDispatcher>();
 builder.Services.AddHostedService<TokenRefreshBackgroundService>();
 

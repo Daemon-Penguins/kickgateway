@@ -13,46 +13,13 @@ public static class SubscriptionEndpoints
         // Idempotent: skips events that already have a row in EventSubscriptions.
         routes.MapPost("/api/subscriptions/{broadcasterId:guid}/enroll", async (
             Guid broadcasterId,
-            KickGatewayDbContext db,
-            BroadcasterTokenService tokens,
-            IKickClient kick,
-            ILoggerFactory lf,
+            SubscriptionEnrollmentService enroll,
             CancellationToken ct) =>
         {
-            var log = lf.CreateLogger("KickEnroll");
-            var account = await db.Broadcasters
-                .Include(x => x.Subscriptions)
-                .Include(x => x.KickClientApp)
-                .FirstOrDefaultAsync(x => x.Id == broadcasterId, ct);
-            if (account is null) return Results.NotFound(new { error = "broadcaster not found" });
-
-            var token = await tokens.GetAccessTokenAsync(broadcasterId, ct);
-            if (token is null) return Results.BadRequest(new { error = "no usable access token (refresh failed?)" });
-
-            var results = new List<object>();
-            foreach (var (eventName, version) in KickEventTypes.All)
-            {
-                if (account.Subscriptions.Any(s => s.EventType == eventName && s.Version == version))
-                {
-                    results.Add(new { eventName, version, status = "already_subscribed" });
-                    continue;
-                }
-                var info = await kick.CreateSubscriptionAsync(token, eventName, version, "webhook", broadcasterUserId: null, ct);
-                if (info is null)
-                {
-                    results.Add(new { eventName, version, status = "failed" });
-                    continue;
-                }
-                account.Subscriptions.Add(new KickEventSubscription
-                {
-                    EventType = eventName,
-                    Version = version,
-                    Method = "webhook",
-                    KickSubscriptionId = info.Id,
-                });
-                results.Add(new { eventName, version, status = "subscribed", subscriptionId = info.Id });
-            }
-            await db.SaveChangesAsync(ct);
+            var (ok, error, results) = await enroll.EnrollAllAsync(broadcasterId, ct);
+            if (!ok) return error == "broadcaster not found"
+                ? Results.NotFound(new { error })
+                : Results.BadRequest(new { error });
             return Results.Ok(new { broadcasterId, results });
         });
 

@@ -1,6 +1,9 @@
 @page "/admin/broadcasters"
+@using System.Text.Json
+@using TailoredApps.KickGateway.Api.Services
 @inject IDbContextFactory<KickGatewayDbContext> DbFactory
 @inject NavigationManager Nav
+@inject IServiceScopeFactory ScopeFactory
 
 <h1>Broadcasters</h1>
 <p class="muted">Each row is one Kick channel connected under one client app. Use "Connect" to begin a fresh OAuth flow for a channel.</p>
@@ -76,8 +79,6 @@
     Guid _chosenClientId;
     string? _lastEnrollResult;
 
-    [Inject] IHttpClientFactory Http { get; set; } = default!;
-
     protected override async Task OnInitializedAsync() => await Reload();
 
     async Task Reload()
@@ -107,10 +108,15 @@
 
     async Task Enroll(Guid id)
     {
-        var http = Http.CreateClient();
-        http.BaseAddress = new Uri(Nav.BaseUri);
-        var resp = await http.PostAsync($"/api/subscriptions/{id}/enroll", null);
-        _lastEnrollResult = await resp.Content.ReadAsStringAsync();
+        // Call the enrollment service in-process. The previous HTTP-self-loopback
+        // (Blazor → /api/subscriptions/{id}/enroll → 10× Kick POST) overflowed
+        // the 30 s standard HttpClient resilience timeout and crashed the circuit.
+        await using var scope = ScopeFactory.CreateAsyncScope();
+        var enroll = scope.ServiceProvider.GetRequiredService<SubscriptionEnrollmentService>();
+        var (ok, error, results) = await enroll.EnrollAllAsync(id);
+        _lastEnrollResult = JsonSerializer.Serialize(
+            new { ok, error, results },
+            new JsonSerializerOptions { WriteIndented = true });
         await Reload();
     }
 }
