@@ -15,8 +15,10 @@
         nav a:hover { color: #cdd6ff; }
         main { max-width: 1200px; margin: 1.5rem auto; padding: 0 1rem; }
         h1, h2, h3 { color: #fff; }
-        table { width: 100%; border-collapse: collapse; background: #161b23; border: 1px solid #2a3140; border-radius: 8px; overflow: hidden; }
-        th, td { padding: 0.6rem 0.8rem; text-align: left; border-bottom: 1px solid #2a3140; font-size: 0.9rem; vertical-align: top; }
+        table { width: 100%; border-collapse: collapse; background: #161b23; border: 1px solid #2a3140; border-radius: 8px; overflow: hidden; table-layout: auto; }
+        th, td { padding: 0.6rem 0.8rem; text-align: left; border-bottom: 1px solid #2a3140; font-size: 0.9rem; vertical-align: top; word-break: break-word; overflow-wrap: anywhere; }
+        td code, td .muted { word-break: break-all; overflow-wrap: anywhere; }
+        .table-scroll { overflow-x: auto; }
         th { background: #1f2530; color: #9aa4b6; font-weight: 600; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.05em; }
         tr:last-child td { border-bottom: none; }
         button { background: #4f6df0; color: #fff; border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer; font-size: 0.85rem; margin-right: 0.3rem; }
