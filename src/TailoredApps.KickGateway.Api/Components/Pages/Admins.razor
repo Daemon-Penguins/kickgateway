@@ -1,0 +1,189 @@
+@page "/admin/admins"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = TailoredApps.KickGateway.Api.Auth.AdminPolicies.SuperAdminOnly)]
+@using TailoredApps.KickGateway.Api.Auth
+@inject IDbContextFactory<KickGatewayDbContext> DbFactory
+
+<h1>Admins</h1>
+<p class="muted">SuperAdmin only. Per-client roles are scoped to one <code>KickClientApp</code>. SuperAdmin is global. The system always keeps at least one SuperAdmin.</p>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="card" style="border-color:#c04040;">
+        <strong style="color:#f0b3b3;">@_error</strong>
+    </div>
+}
+
+<div class="card">
+    <h3>Add admin</h3>
+    <EditForm Model="_new" OnValidSubmit="OnAdd" FormName="newAdmin">
+        <label><span>Kick username</span><InputText @bind-Value="_new.Username" /></label>
+        <label><span>Kick user id (optional — resolved on first login)</span><InputText @bind-Value="_new.KickUserId" /></label>
+        <label><span>Email (optional)</span><InputText @bind-Value="_new.Email" /></label>
+        <button type="submit">Create</button>
+    </EditForm>
+</div>
+
+<div class="card">
+    <h3>Existing admins</h3>
+    @if (_admins is null)
+    {
+        <p>Loading…</p>
+    }
+    else if (_admins.Count == 0)
+    {
+        <p class="muted">None.</p>
+    }
+    else
+    {
+        <table>
+            <thead>
+                <tr><th>Username</th><th>Kick id</th><th>Roles</th><th>Enabled</th><th>Last login</th><th></th></tr>
+            </thead>
+            <tbody>
+                @foreach (var a in _admins)
+                {
+                    <tr>
+                        <td><strong>@a.Username</strong>@(string.IsNullOrEmpty(a.Email) ? null : new MarkupString($"<br /><span class='muted'>{a.Email}</span>"))</td>
+                        <td>@(string.IsNullOrEmpty(a.KickUserId) ? new MarkupString("<span class='muted'>pending first login</span>") : new MarkupString($"<code>{a.KickUserId}</code>"))</td>
+                        <td>
+                            @if (a.Roles.Count == 0)
+                            {
+                                <span class="muted">(no roles)</span>
+                            }
+                            else
+                            {
+                                @foreach (var r in a.Roles.OrderBy(x => x.Role))
+                                {
+                                    var clientName = r.KickClientAppId is null ? "—" : (_clientApps?.FirstOrDefault(c => c.Id == r.KickClientAppId)?.Name ?? r.KickClientAppId.ToString());
+                                    <span class="pill" style="margin-right:0.3rem;">@r.Role @(r.KickClientAppId is null ? "" : $"@ {clientName}")</span>
+                                    <button class="secondary" style="font-size:0.7rem;padding:0.1rem 0.4rem;" @onclick="() => RevokeRole(a.Id, r.Id)">×</button>
+                                }
+                            }
+                        </td>
+                        <td>@(a.IsEnabled ? new MarkupString("<span class='pill green'>enabled</span>") : new MarkupString("<span class='pill red'>disabled</span>"))</td>
+                        <td><span class="muted">@(a.LastLoginAt?.ToString("u") ?? "—")</span></td>
+                        <td><button class="secondary" @onclick="() => ToggleEnabled(a.Id)">@(a.IsEnabled ? "Disable" : "Enable")</button></td>
+                    </tr>
+                    <tr>
+                        <td colspan="6" style="background:#0e1116;">
+                            <div style="display:flex;gap:0.4rem;align-items:flex-end;flex-wrap:wrap;padding:0.3rem 0;">
+                                <label style="margin:0;">
+                                    <span style="font-size:0.7rem;">Role</span>
+                                    <select @bind="_grantRole">
+                                        @foreach (var r in Enum.GetValues<AdminRole>())
+                                        {
+                                            <option value="@r">@r</option>
+                                        }
+                                    </select>
+                                </label>
+                                <label style="margin:0;">
+                                    <span style="font-size:0.7rem;">Client (per-client roles only)</span>
+                                    <select @bind="_grantClientId">
+                                        <option value="@Guid.Empty">— (none / SuperAdmin)</option>
+                                        @if (_clientApps is not null)
+                                        {
+                                            @foreach (var c in _clientApps)
+                                            {
+                                                <option value="@c.Id">@c.Name</option>
+                                            }
+                                        }
+                                    </select>
+                                </label>
+                                <button @onclick="() => GrantRole(a.Id)">Grant</button>
+                            </div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</div>
+
+@code {
+    List<AdminUser>? _admins;
+    List<KickClientApp>? _clientApps;
+    NewAdminInput _new = new();
+    AdminRole _grantRole = AdminRole.ClientViewer;
+    Guid _grantClientId = Guid.Empty;
+    string? _error;
+
+    class NewAdminInput
+    {
+        public string Username { get; set; } = "";
+        public string KickUserId { get; set; } = "";
+        public string Email { get; set; } = "";
+    }
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    async Task Reload()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _admins = await db.AdminUsers.Include(x => x.Roles).OrderBy(x => x.Username).ToListAsync();
+        _clientApps = await db.ClientApps.OrderBy(x => x.Name).ToListAsync();
+    }
+
+    async Task OnAdd()
+    {
+        if (string.IsNullOrWhiteSpace(_new.Username)) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        db.AdminUsers.Add(new AdminUser
+        {
+            Username = _new.Username.Trim(),
+            KickUserId = _new.KickUserId.Trim(),
+            Email = string.IsNullOrWhiteSpace(_new.Email) ? null : _new.Email.Trim(),
+            IsEnabled = true,
+        });
+        await db.SaveChangesAsync();
+        _new = new();
+        await Reload();
+    }
+
+    async Task ToggleEnabled(Guid id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var u = await db.AdminUsers.FindAsync(id);
+        if (u is null) return;
+        u.IsEnabled = !u.IsEnabled;
+        u.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        await Reload();
+    }
+
+    async Task GrantRole(Guid userId)
+    {
+        // Validate role+client invariant client-side; server already enforces it.
+        if (_grantRole == AdminRole.SuperAdmin && _grantClientId != Guid.Empty) { _error = "SuperAdmin is global — leave client unset."; return; }
+        if (_grantRole != AdminRole.SuperAdmin && _grantClientId == Guid.Empty) { _error = "Per-client roles require a client."; return; }
+        _error = null;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var u = await db.AdminUsers.Include(x => x.Roles).FirstOrDefaultAsync(x => x.Id == userId);
+        if (u is null) return;
+        Guid? clientId = _grantClientId == Guid.Empty ? null : _grantClientId;
+        if (u.Roles.Any(r => r.Role == _grantRole && r.KickClientAppId == clientId)) return;
+        db.AdminUserRoles.Add(new AdminUserRole
+        {
+            AdminUserId = userId,
+            Role = _grantRole,
+            KickClientAppId = clientId,
+        });
+        await db.SaveChangesAsync();
+        await Reload();
+    }
+
+    async Task RevokeRole(Guid userId, Guid roleId)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var role = await db.AdminUserRoles.FirstOrDefaultAsync(r => r.Id == roleId && r.AdminUserId == userId);
+        if (role is null) return;
+        if (role.Role == AdminRole.SuperAdmin)
+        {
+            var remaining = await db.AdminUserRoles.CountAsync(r => r.Role == AdminRole.SuperAdmin);
+            if (remaining <= 1) { _error = "Cannot revoke the last SuperAdmin grant."; return; }
+        }
+        db.AdminUserRoles.Remove(role);
+        await db.SaveChangesAsync();
+        await Reload();
+    }
+}

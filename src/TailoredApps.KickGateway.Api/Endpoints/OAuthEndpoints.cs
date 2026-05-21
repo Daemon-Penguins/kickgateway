@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using TailoredApps.Integrations.Kick;
+using TailoredApps.KickGateway.Api.Auth;
 using TailoredApps.KickGateway.Api.Data;
 using TailoredApps.KickGateway.Api.Services;
 
@@ -15,11 +16,15 @@ public static class OAuthEndpoints
         routes.MapGet("/api/auth/kick/start", async (
             Guid clientAppId,
             string? channelSlug,
+            System.Security.Claims.ClaimsPrincipal user,
             KickGatewayDbContext db,
             PkceStateStore pkce,
             IOptions<KickGlobalDefaults> defaults,
             CancellationToken ct) =>
         {
+            if (!user.HasClientRoleAtLeast(clientAppId, Data.AdminRole.ClientAdmin))
+                return Results.Forbid();
+
             var app = await db.ClientApps.FirstOrDefaultAsync(x => x.Id == clientAppId && x.IsEnabled, ct);
             if (app is null) return Results.NotFound(new { error = "client app not found / disabled" });
 

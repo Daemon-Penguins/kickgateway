@@ -32,6 +32,13 @@ public class KickClientApp
 
     public bool IsEnabled { get; set; } = true;
 
+    /// <summary>
+    /// When true, this client app is the one used for the admin SSO flow at
+    /// <c>/api/auth/admin/login</c>. Exactly one row should carry this flag.
+    /// Enforced by a filtered unique index in <see cref="KickGatewayDbContext"/>.
+    /// </summary>
+    public bool IsAdminLoginClient { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

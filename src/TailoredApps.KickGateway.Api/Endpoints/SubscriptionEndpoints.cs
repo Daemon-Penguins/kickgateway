@@ -1,5 +1,7 @@
+using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using TailoredApps.Integrations.Kick;
+using TailoredApps.KickGateway.Api.Auth;
 using TailoredApps.KickGateway.Api.Data;
 using TailoredApps.KickGateway.Api.Services;
 
@@ -13,9 +15,14 @@ public static class SubscriptionEndpoints
         // Idempotent: skips events that already have a row in EventSubscriptions.
         routes.MapPost("/api/subscriptions/{broadcasterId:guid}/enroll", async (
             Guid broadcasterId,
+            ClaimsPrincipal user,
+            KickGatewayDbContext db,
             SubscriptionEnrollmentService enroll,
             CancellationToken ct) =>
         {
+            var (_, err) = await user.ResolveBroadcasterClientAsync(db, broadcasterId, AdminRole.ClientOperator, ct);
+            if (err is not null) return err;
+
             var (ok, error, results) = await enroll.EnrollAllAsync(broadcasterId, ct);
             if (!ok) return error == "broadcaster not found"
                 ? Results.NotFound(new { error })
@@ -25,11 +32,15 @@ public static class SubscriptionEndpoints
 
         routes.MapGet("/api/subscriptions/{broadcasterId:guid}", async (
             Guid broadcasterId,
+            ClaimsPrincipal user,
             KickGatewayDbContext db,
             BroadcasterTokenService tokens,
             IKickClient kick,
             CancellationToken ct) =>
         {
+            var (_, err) = await user.ResolveBroadcasterClientAsync(db, broadcasterId, AdminRole.ClientViewer, ct);
+            if (err is not null) return err;
+
             var account = await db.Broadcasters.Include(x => x.Subscriptions).FirstOrDefaultAsync(x => x.Id == broadcasterId, ct);
             if (account is null) return Results.NotFound();
 
@@ -43,11 +54,15 @@ public static class SubscriptionEndpoints
         routes.MapDelete("/api/subscriptions/{broadcasterId:guid}/{subscriptionId}", async (
             Guid broadcasterId,
             string subscriptionId,
+            ClaimsPrincipal user,
             KickGatewayDbContext db,
             BroadcasterTokenService tokens,
             IKickClient kick,
             CancellationToken ct) =>
         {
+            var (_, err) = await user.ResolveBroadcasterClientAsync(db, broadcasterId, AdminRole.ClientAdmin, ct);
+            if (err is not null) return err;
+
             var token = await tokens.GetAccessTokenAsync(broadcasterId, ct);
             if (token is null) return Results.BadRequest(new { error = "no usable token" });
             var ok = await kick.DeleteSubscriptionAsync(token, subscriptionId, ct);

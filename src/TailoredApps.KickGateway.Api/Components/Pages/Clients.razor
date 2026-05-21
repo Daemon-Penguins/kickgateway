@@ -1,4 +1,5 @@
 @page "/admin/clients"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = TailoredApps.KickGateway.Api.Auth.AdminPolicies.SuperAdminOnly)]
 @inject IDbContextFactory<KickGatewayDbContext> DbFactory
 
 <h1>Client apps</h1>
@@ -31,7 +32,7 @@
     {
         <table>
             <thead>
-                <tr><th>Name</th><th>Client ID</th><th>Redirect</th><th>Webhook</th><th>Enabled</th><th></th></tr>
+                <tr><th>Name</th><th>Client ID</th><th>Redirect</th><th>Webhook</th><th>Admin SSO</th><th>Enabled</th><th></th></tr>
             </thead>
             <tbody>
             @foreach (var app in _apps)
@@ -41,6 +42,16 @@
                     <td><code>@app.ClientId</code></td>
                     <td><span class="muted">@app.RedirectUri</span></td>
                     <td><span class="muted">@app.WebhookUrl</span></td>
+                    <td>
+                        @if (app.IsAdminLoginClient)
+                        {
+                            <span class="pill green">Admin SSO</span>
+                        }
+                        else
+                        {
+                            <button class="secondary" style="font-size:0.7rem;padding:0.1rem 0.4rem;" @onclick="() => SetAdminLoginClient(app.Id)">make admin SSO</button>
+                        }
+                    </td>
                     <td>@(app.IsEnabled ? new MarkupString("<span class='pill green'>enabled</span>") : new MarkupString("<span class='pill red'>disabled</span>"))</td>
                     <td>
                         <button class="secondary" @onclick="() => Toggle(app.Id)">@(app.IsEnabled ? "Disable" : "Enable")</button>
@@ -90,6 +101,20 @@
         });
         await db.SaveChangesAsync();
         _new = new();
+        await Reload();
+    }
+
+    async Task SetAdminLoginClient(Guid id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        // Clear the flag on whoever currently owns it, then set on the target.
+        var others = await db.ClientApps.Where(c => c.IsAdminLoginClient).ToListAsync();
+        foreach (var o in others) o.IsAdminLoginClient = false;
+        var target = await db.ClientApps.FindAsync(id);
+        if (target is null) return;
+        target.IsAdminLoginClient = true;
+        target.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
         await Reload();
     }
 

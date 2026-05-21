@@ -1,6 +1,9 @@
 using MassTransit;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using TailoredApps.Integrations.Kick;
+using TailoredApps.KickGateway.Api.Auth;
 using TailoredApps.KickGateway.Api.Components;
 using TailoredApps.KickGateway.Api.Data;
 using TailoredApps.KickGateway.Api.Endpoints;
@@ -23,6 +26,30 @@ builder.Services.AddDbContext<KickGatewayDbContext>(opts =>
     opts.UseSqlServer(connStr, npg => npg.MigrationsAssembly(typeof(KickGatewayDbContext).Assembly.FullName)));
 builder.Services.AddDbContextFactory<KickGatewayDbContext>(opts =>
     opts.UseSqlServer(connStr), lifetime: ServiceLifetime.Scoped);
+
+// === Data-protection key ring persisted to DB ===
+// Without this, every container restart generates a new key, breaking cookies
+// (admin sign-in) and antiforgery tokens across redeploys.
+builder.Services.AddDbContext<DataProtectionDbContext>(opts =>
+    opts.UseSqlServer(connStr, sql => sql.MigrationsAssembly(typeof(DataProtectionDbContext).Assembly.FullName)));
+builder.Services.AddDataProtection()
+    .SetApplicationName("kickgateway")
+    .PersistKeysToDbContext<DataProtectionDbContext>();
+
+// === Cookie auth (admin SSO via Kick OAuth) ===
+builder.Services.AddAuthentication(AdminClaims.AuthenticationScheme)
+    .AddCookie(AdminClaims.AuthenticationScheme, o =>
+    {
+        o.Cookie.Name = "kickgw_admin";
+        o.Cookie.HttpOnly = true;
+        o.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        o.Cookie.SameSite = SameSiteMode.Lax;
+        o.ExpireTimeSpan = TimeSpan.FromDays(14);
+        o.SlidingExpiration = true;
+        o.LoginPath = "/api/auth/admin/login";
+        o.AccessDeniedPath = "/admin/forbidden";
+    });
+builder.Services.AddAuthorization(o => o.AddKickGatewayPolicies());
 
 // === Domain services ===
 builder.Services.AddScoped<PkceStateStore>();
@@ -63,6 +90,10 @@ builder.Services.AddMassTransit(x =>
 // === Blazor Server ===
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
 builder.Services.AddHttpClient();
+builder.Services.AddCascadingAuthenticationState();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<Microsoft.AspNetCore.Components.Authorization.AuthenticationStateProvider,
+    BlazorAuthStateProvider>();
 
 builder.Services.AddOpenApi();
 
@@ -74,6 +105,8 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<KickGatewayDbContext>();
     await db.Database.MigrateAsync();
+    var dp = scope.ServiceProvider.GetRequiredService<DataProtectionDbContext>();
+    await dp.Database.MigrateAsync();
 }
 
 if (app.Environment.IsDevelopment())
@@ -89,13 +122,27 @@ app.MapDefaultEndpoints();
 // without anti-forgery checks blocking it.
 app.MapStaticAssets();
 
+app.UseAuthentication();
+app.UseAuthorization();
+
 app.UseAntiforgery();
 
-app.MapClientAppEndpoints();
-app.MapBroadcasterEndpoints();
-app.MapOAuthEndpoints();
-app.MapSubscriptionEndpoints();
+// Webhook receiver stays anonymous (auth = Kick signature verification, not cookies).
 app.MapWebhookEndpoints();
+
+// Admin SSO endpoints — public by definition (login/callback/logout).
+app.MapAdminAuthEndpoints();
+
+// All admin-facing REST endpoints — must be logged in. Per-client checks
+// happen inside the handlers. Group all under a single "/" gate so attribute-
+// like .RequireAuthorization sticks (extension methods that take
+// IEndpointRouteBuilder can't be chained with .RequireAuthorization themselves).
+var admin = app.MapGroup("").RequireAuthorization(AdminPolicies.AnyAuthenticatedAdmin);
+admin.MapClientAppEndpoints();
+admin.MapBroadcasterEndpoints();
+admin.MapOAuthEndpoints();
+admin.MapSubscriptionEndpoints();
+admin.MapAdminUserEndpoints();   // per-route SuperAdminOnly policy inside
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode()

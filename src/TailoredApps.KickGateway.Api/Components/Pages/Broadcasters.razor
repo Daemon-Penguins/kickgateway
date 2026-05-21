@@ -1,9 +1,14 @@
 @page "/admin/broadcasters"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize]
+@using System.Security.Claims
 @using System.Text.Json
+@using Microsoft.AspNetCore.Components.Authorization
+@using TailoredApps.KickGateway.Api.Auth
 @using TailoredApps.KickGateway.Api.Services
 @inject IDbContextFactory<KickGatewayDbContext> DbFactory
 @inject NavigationManager Nav
 @inject IServiceScopeFactory ScopeFactory
+@inject AuthenticationStateProvider AuthState
 
 <h1>Broadcasters</h1>
 <p class="muted">Each row is one Kick channel connected under one client app. Use "Connect" to begin a fresh OAuth flow for a channel.</p>
@@ -55,8 +60,14 @@
                     <td><span class="muted">@b.AccessTokenExpiresAt.ToString("u")</span></td>
                     <td>@(b.IsEnabled ? new MarkupString("<span class='pill green'>enabled</span>") : new MarkupString("<span class='pill red'>disabled</span>"))</td>
                     <td>
-                        <button @onclick="() => Enroll(b.Id)">Enroll all events</button>
-                        <button class="secondary" @onclick="() => Toggle(b.Id)">@(b.IsEnabled ? "Disable" : "Enable")</button>
+                        @if (CanEnroll(b))
+                        {
+                            <button @onclick="() => Enroll(b.Id)">Enroll all events</button>
+                        }
+                        @if (CanToggle(b))
+                        {
+                            <button class="secondary" @onclick="() => Toggle(b.Id)">@(b.IsEnabled ? "Disable" : "Enable")</button>
+                        }
                     </td>
                 </tr>
             }
@@ -79,15 +90,46 @@
     Guid _chosenClientId;
     string? _lastEnrollResult;
 
-    protected override async Task OnInitializedAsync() => await Reload();
+    ClaimsPrincipal _user = new(new ClaimsIdentity());
+
+    protected override async Task OnInitializedAsync()
+    {
+        _user = (await AuthState.GetAuthenticationStateAsync()).User;
+        await Reload();
+    }
 
     async Task Reload()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        _clientChoices = await db.ClientApps.Where(x => x.IsEnabled).OrderBy(x => x.Name).ToListAsync();
+        // Only client apps the user can administer should appear in the connect dropdown
+        // (StartConnect needs ClientAdmin on the chosen client).
+        IQueryable<KickClientApp> clientQ = db.ClientApps.Where(x => x.IsEnabled);
+        if (!_user.IsSuperAdmin())
+        {
+            var canAdmin = _user.ClientRoles()
+                .Where(x => x.Role == AdminRole.ClientAdmin)
+                .Select(x => x.ClientAppId)
+                .ToHashSet();
+            clientQ = clientQ.Where(c => canAdmin.Contains(c.Id));
+        }
+        _clientChoices = await clientQ.OrderBy(x => x.Name).ToListAsync();
         if (_chosenClientId == Guid.Empty && _clientChoices.Count > 0) _chosenClientId = _clientChoices[0].Id;
-        _rows = await db.Broadcasters.Include(x => x.KickClientApp).Include(x => x.Subscriptions).OrderBy(x => x.Username).ToListAsync();
+
+        IQueryable<KickBroadcasterAccount> rowQ = db.Broadcasters
+            .Include(x => x.KickClientApp).Include(x => x.Subscriptions);
+        if (!_user.IsSuperAdmin())
+        {
+            var visible = _user.AccessibleClientAppIds();
+            rowQ = rowQ.Where(b => visible.Contains(b.KickClientAppId));
+        }
+        _rows = await rowQ.OrderBy(x => x.Username).ToListAsync();
     }
+
+    bool CanEnroll(KickBroadcasterAccount b) =>
+        _user.HasClientRoleAtLeast(b.KickClientAppId, AdminRole.ClientOperator);
+
+    bool CanToggle(KickBroadcasterAccount b) =>
+        _user.HasClientRoleAtLeast(b.KickClientAppId, AdminRole.ClientAdmin);
 
     void StartConnect()
     {
@@ -100,6 +142,7 @@
         await using var db = await DbFactory.CreateDbContextAsync();
         var b = await db.Broadcasters.FindAsync(id);
         if (b is null) return;
+        if (!CanToggle(b)) return;            // server-side check; UI hides the button too
         b.IsEnabled = !b.IsEnabled;
         b.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync();
@@ -108,6 +151,11 @@
 
     async Task Enroll(Guid id)
     {
+        // Permission check first — the row could have been swapped via dev-tools
+        // before we got here; the in-process call below has no claims context.
+        var target = _rows?.FirstOrDefault(b => b.Id == id);
+        if (target is null || !CanEnroll(target)) return;
+
         // Call the enrollment service in-process. The previous HTTP-self-loopback
         // (Blazor → /api/subscriptions/{id}/enroll → 10× Kick POST) overflowed
         // the 30 s standard HttpClient resilience timeout and crashed the circuit.
