@@ -7,6 +7,7 @@ using TailoredApps.KickGateway.Api.Auth;
 using TailoredApps.KickGateway.Api.Components;
 using TailoredApps.KickGateway.Api.Data;
 using TailoredApps.KickGateway.Api.Endpoints;
+using TailoredApps.KickGateway.Api.LiveFeed;
 using TailoredApps.KickGateway.Api.Services;
 using TailoredApps.KickGateway.Api.Webhooks;
 
@@ -58,11 +59,18 @@ builder.Services.AddScoped<SubscriptionEnrollmentService>();
 builder.Services.AddScoped<KickWebhookDispatcher>();
 builder.Services.AddHostedService<TokenRefreshBackgroundService>();
 
-// === MassTransit + RabbitMQ + EF outbox ===
-// The Gateway.Api process is publish-only. Consumers live in Gateway.Worker.
-// MassTransit auto-creates a topic exchange per published contract; subscribers
-// bind their queues to those exchanges on their side. We use the EF
-// transactional outbox so a publish only goes out after the DB transaction commits.
+// === Live-feed tap services ===
+// Singleton in-memory ring buffer per client + a broadcaster→client resolver,
+// both consumed by LiveFeedConsumer below.
+builder.Services.AddSingleton<LiveEventBuffer>();
+builder.Services.AddSingleton<BroadcasterClientResolver>();
+
+// === MassTransit + RabbitMQ + EF outbox + live-feed consumer ===
+// The Api process is the publisher (outbox→RabbitMQ) AND a fan-out subscriber
+// that taps every event into the in-memory live-feed buffer for the admin UI.
+// Worker continues to consume the same exchanges into its own kebab-case queue
+// — competing-consumers only happens for consumers sharing a queue name, so the
+// api's per-process queue is a true fanout and doesn't steal worker messages.
 builder.Services.AddMassTransit(x =>
 {
     x.AddEntityFrameworkOutbox<KickGatewayDbContext>(o =>
@@ -73,6 +81,7 @@ builder.Services.AddMassTransit(x =>
     });
 
     x.SetKebabCaseEndpointNameFormatter();
+    x.AddConsumer<LiveFeedConsumer>();
 
     x.UsingRabbitMq((ctx, cfg) =>
     {
@@ -83,7 +92,22 @@ builder.Services.AddMassTransit(x =>
             h.Password(rmq["Password"] ?? "guest");
         });
 
-        cfg.ConfigureEndpoints(ctx);
+        // Live-feed queue: dedicated name + auto-delete + non-durable. Each API
+        // replica gets its own queue (queue name suffixed with the host so two
+        // replicas don't compete). Messages buffered for this queue while the
+        // API is down are simply discarded — the live feed is best-effort UX,
+        // not a durable record (durable record = ReceivedWebhook table).
+        var hostSuffix = Environment.MachineName.ToLowerInvariant();
+        cfg.ReceiveEndpoint($"kickgateway-api-livefeed-{hostSuffix}", e =>
+        {
+            e.AutoDelete = true;
+            e.Durable = false;
+            e.ConfigureConsumer<LiveFeedConsumer>(ctx);
+        });
+
+        // No ConfigureEndpoints — we've declared the only consumer explicitly,
+        // and we don't want a second kebab-case queue (would conflict with the
+        // worker's competing-consumer queue of the same name).
     });
 });
 

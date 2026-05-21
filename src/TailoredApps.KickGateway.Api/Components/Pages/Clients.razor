@@ -55,6 +55,7 @@
                     </td>
                     <td>@(app.IsEnabled ? new MarkupString("<span class='pill green'>enabled</span>") : new MarkupString("<span class='pill red'>disabled</span>"))</td>
                     <td>
+                        <a href="/admin/clients/@app.Id/events"><button class="secondary">Live events</button></a>
                         <button class="secondary" @onclick="() => Toggle(app.Id)">@(app.IsEnabled ? "Disable" : "Enable")</button>
                         <button class="danger" @onclick="() => Delete(app.Id)">Delete</button>
                     </td>

@@ -1,0 +1,116 @@
+@page "/admin/clients/{ClientAppId:guid}/events"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize]
+@implements IAsyncDisposable
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@using TailoredApps.KickGateway.Api.Auth
+@using TailoredApps.KickGateway.Api.LiveFeed
+@inject IDbContextFactory<KickGatewayDbContext> DbFactory
+@inject LiveEventBuffer Buffer
+@inject AuthenticationStateProvider AuthState
+@inject NavigationManager Nav
+
+@if (_forbidden)
+{
+    <h1>Forbidden</h1>
+    <p class="muted">You don't have access to this client's events.</p>
+}
+else if (_clientApp is null)
+{
+    <h1>Live events</h1>
+    <p>Loading…</p>
+}
+else
+{
+    <h1>Live events — @_clientApp.Name</h1>
+    <p class="muted">Last @LiveEventBuffer.Capacity events received for this client. Updates live as webhooks arrive.</p>
+
+    <div class="card">
+        @if (_events.Count == 0)
+        {
+            <p class="muted">No events yet. Trigger a webhook (e.g. send a chat message in a connected broadcaster's channel) to see it appear here.</p>
+        }
+        else
+        {
+            <div class="table-scroll">
+            <table>
+                <thead>
+                    <tr><th style="width:11rem;">Received</th><th style="width:14rem;">Event</th><th style="width:11rem;">Broadcaster</th><th>Summary</th><th></th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var e in _events)
+                    {
+                        <tr>
+                            <td><span class="muted">@e.ReceivedAt.ToString("HH:mm:ss")</span><br /><span class="muted" style="font-size:0.7rem;">@e.ReceivedAt.ToString("yyyy-MM-dd")</span></td>
+                            <td><code>@e.EventType</code></td>
+                            <td>@e.BroadcasterSlug<br /><span class="muted" style="font-size:0.7rem;">@e.BroadcasterUserId</span></td>
+                            <td>@e.Summary</td>
+                            <td>
+                                <button class="secondary" style="font-size:0.7rem;padding:0.1rem 0.4rem;" @onclick="() => ToggleRaw(e.KickMessageId)">@(_expanded.Contains(e.KickMessageId) ? "hide" : "raw")</button>
+                            </td>
+                        </tr>
+                        @if (_expanded.Contains(e.KickMessageId))
+                        {
+                            <tr>
+                                <td colspan="5" style="background:#0e1116;">
+                                    <pre style="margin:0;font-size:0.75rem;color:#cdd6ff;white-space:pre-wrap;word-break:break-all;">@e.RawPayload</pre>
+                                </td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public Guid ClientAppId { get; set; }
+
+    KickClientApp? _clientApp;
+    List<LiveEvent> _events = new();
+    HashSet<string> _expanded = new();
+    bool _forbidden;
+    IDisposable? _sub;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await AuthState.GetAuthenticationStateAsync()).User;
+        if (!user.HasClientRoleAtLeast(ClientAppId, AdminRole.ClientViewer))
+        {
+            _forbidden = true;
+            return;
+        }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _clientApp = await db.ClientApps.FindAsync(ClientAppId);
+        if (_clientApp is null) { _forbidden = true; return; }
+
+        _events = Buffer.Snapshot(ClientAppId).ToList();
+
+        // Subscribe with InvokeAsync so the callback hops onto the renderer's
+        // sync context — direct StateHasChanged from a MassTransit thread would
+        // race with the renderer.
+        _sub = Buffer.Subscribe(ClientAppId, ev =>
+        {
+            _ = InvokeAsync(() =>
+            {
+                _events.Insert(0, ev);
+                while (_events.Count > LiveEventBuffer.Capacity) _events.RemoveAt(_events.Count - 1);
+                StateHasChanged();
+            });
+        });
+    }
+
+    void ToggleRaw(string id)
+    {
+        if (!_expanded.Add(id)) _expanded.Remove(id);
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        _sub?.Dispose();
+        return ValueTask.CompletedTask;
+    }
+}
