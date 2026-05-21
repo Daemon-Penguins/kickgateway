@@ -82,6 +82,12 @@ if (app.Environment.IsDevelopment())
 
 app.MapDefaultEndpoints();
 
+// Static assets (Blazor framework JS + any wwwroot content).
+// MapStaticAssets is the .NET 10-optimized replacement for UseStaticFiles —
+// must run BEFORE UseAntiforgery so _framework/blazor.web.js is reachable
+// without anti-forgery checks blocking it.
+app.MapStaticAssets();
+
 app.UseAntiforgery();
 
 app.MapClientAppEndpoints();
@@ -90,6 +96,8 @@ app.MapOAuthEndpoints();
 app.MapSubscriptionEndpoints();
 app.MapWebhookEndpoints();
 
-app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
+app.MapRazorComponents<App>()
+    .AddInteractiveServerRenderMode()
+    .WithStaticAssets();
 
 app.Run();
