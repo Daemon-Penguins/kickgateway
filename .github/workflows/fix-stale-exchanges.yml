@@ -1,0 +1,105 @@
+name: 🧹 Fix stale fanout exchanges (one-shot)
+
+# Manual-trigger only. Use this once after the fanout → topic topology
+# migration to delete the old fanout exchanges on the broker so MassTransit
+# recreates them as topic on the next reconnect.
+#
+# After it runs: restart the api+worker containers (or just wait — the
+# receive-transport will reconnect on its retry timer) and exchanges come
+# back as `topic`. Bindings on durable queues are dropped together with the
+# exchange and re-declared on subscriber start.
+
+on:
+  workflow_dispatch:
+    inputs:
+      restart_containers:
+        description: 'Also restart api+worker after deleting exchanges'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  fix:
+    name: Delete stale exchanges
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Locate rabbitmq container + delete fanout exchanges
+        env:
+          RABBIT_VHOST: ${{ secrets.RABBITMQ_VHOST }}
+          RABBIT_USER: ${{ secrets.RABBITMQ_USERNAME }}
+          RABBIT_PASS: ${{ secrets.RABBITMQ_PASSWORD }}
+        run: |
+          SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
+
+          # rabbitmqadmin lives inside the rabbit container; find it by its
+          # image name regardless of compose project.
+          RABBIT_CT=$($SSH_CMD "docker ps --format '{{.Names}}\t{{.Image}}' | awk '/rabbitmq/ {print \$1; exit}'")
+          if [ -z "$RABBIT_CT" ]; then
+            echo "❌ No running rabbitmq container found on the VPS"
+            exit 1
+          fi
+          echo "Using rabbit container: $RABBIT_CT"
+
+          EXCHANGES=(
+            "TailoredApps.KickGateway.Contracts.Events:ChatMessageSent"
+            "TailoredApps.KickGateway.Contracts.Events:ChannelFollowed"
+            "TailoredApps.KickGateway.Contracts.Events:ChannelSubscriptionNew"
+            "TailoredApps.KickGateway.Contracts.Events:ChannelSubscriptionGifts"
+            "TailoredApps.KickGateway.Contracts.Events:ChannelSubscriptionRenewal"
+            "TailoredApps.KickGateway.Contracts.Events:LivestreamStatusUpdated"
+            "TailoredApps.KickGateway.Contracts.Events:LivestreamMetadataUpdated"
+            "TailoredApps.KickGateway.Contracts.Events:ModerationBanned"
+            "TailoredApps.KickGateway.Contracts.Events:KicksGifted"
+            "TailoredApps.KickGateway.Contracts.Events:ChannelRewardRedemptionUpdated"
+            "TailoredApps.KickGateway.Contracts.Events:KickEventUnknown"
+          )
+
+          for ex in "${EXCHANGES[@]}"; do
+            echo "── Deleting exchange: $ex ──"
+            $SSH_CMD "docker exec $RABBIT_CT rabbitmqadmin \
+              --username='$RABBIT_USER' --password='$RABBIT_PASS' \
+              --vhost='$RABBIT_VHOST' \
+              delete exchange name='$ex'" || echo "(not present or already gone, continuing)"
+          done
+
+          echo "✅ Exchange cleanup pass complete"
+
+      - name: Restart api+worker
+        if: ${{ github.event.inputs.restart_containers == 'true' }}
+        run: |
+          SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
+          echo "── Restarting api+worker so they redeclare exchanges as topic ──"
+          $SSH_CMD "cd /opt/apps/kickgateway && docker compose restart api worker"
+          sleep 10
+          $SSH_CMD "cd /opt/apps/kickgateway && docker compose ps"
+
+      - name: Tail logs (10s) for sanity check
+        if: ${{ github.event.inputs.restart_containers == 'true' }}
+        run: |
+          SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
+          echo "── api logs (last 30) ──"
+          $SSH_CMD "cd /opt/apps/kickgateway && docker compose logs --tail 30 api" || true
+          echo "── worker logs (last 30) ──"
+          $SSH_CMD "cd /opt/apps/kickgateway && docker compose logs --tail 30 worker" || true
+
+          echo "── searching for residual PRECONDITION_FAILED in last 80 lines ──"
+          if $SSH_CMD "cd /opt/apps/kickgateway && docker compose logs --tail 80 api worker | grep -q 'PRECONDITION_FAILED'"; then
+            echo "❌ Still seeing PRECONDITION_FAILED in logs — exchanges may have been recreated already by mid-flight retries. Re-run this workflow."
+            exit 1
+          fi
+          echo "✅ No PRECONDITION_FAILED in recent logs"
+
+      - name: Cleanup
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
