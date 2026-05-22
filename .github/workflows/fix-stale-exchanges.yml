@@ -1,19 +1,23 @@
 name: 🧹 Fix stale fanout exchanges (one-shot)
 
-# Manual-trigger only. Use this once after the fanout → topic topology
-# migration to delete the old fanout exchanges on the broker so MassTransit
-# recreates them as topic on the next reconnect.
+# Manual-trigger workflow that resolves the post-migration topology mismatch
+# where RabbitMQ holds the old fanout exchanges from before topic-routing
+# was introduced. Sequence:
 #
-# After it runs: restart the api+worker containers (or just wait — the
-# receive-transport will reconnect on its retry timer) and exchanges come
-# back as `topic`. Bindings on durable queues are dropped together with the
-# exchange and re-declared on subscriber start.
+#   1. Stop api+worker so nothing is racing to redeclare exchanges.
+#   2. Delete the 11 stale exchanges via the RabbitMQ HTTP API.
+#   3. Verify they are gone.
+#   4. Start api+worker; MassTransit redeclares them as topic on first use.
+#   5. Verify the new exchanges exist and are type=topic.
+#
+# Idempotent (re-running after success is a no-op apart from a container
+# restart).
 
 on:
   workflow_dispatch:
     inputs:
       restart_containers:
-        description: 'Also restart api+worker after deleting exchanges'
+        description: 'Stop containers, fix, then start them again'
         required: true
         default: 'true'
         type: choice
@@ -23,7 +27,7 @@ on:
 
 jobs:
   fix:
-    name: Delete stale exchanges
+    name: Reset event exchanges
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -34,22 +38,26 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Locate rabbitmq container + delete fanout exchanges
+      - name: Stop api+worker (avoid race)
+        if: ${{ github.event.inputs.restart_containers == 'true' }}
+        run: |
+          SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
+          echo "── Stopping api+worker before broker cleanup ──"
+          $SSH_CMD "cd /opt/apps/kickgateway && docker compose stop api worker"
+
+      - name: Delete stale exchanges via RabbitMQ HTTP API
         env:
+          RABBIT_HOST: ${{ secrets.RABBITMQ_HOST }}
           RABBIT_VHOST: ${{ secrets.RABBITMQ_VHOST }}
           RABBIT_USER: ${{ secrets.RABBITMQ_USERNAME }}
           RABBIT_PASS: ${{ secrets.RABBITMQ_PASSWORD }}
         run: |
           SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
 
-          # rabbitmqadmin lives inside the rabbit container; find it by its
-          # image name regardless of compose project.
-          RABBIT_CT=$($SSH_CMD "docker ps --format '{{.Names}}\t{{.Image}}' | awk '/rabbitmq/ {print \$1; exit}'")
-          if [ -z "$RABBIT_CT" ]; then
-            echo "❌ No running rabbitmq container found on the VPS"
-            exit 1
-          fi
-          echo "Using rabbit container: $RABBIT_CT"
+          # The mgmt API listens on 15672; reach it from inside the VPS so we
+          # don't need to expose it publicly.
+          # vhost goes URL-encoded ('/' → '%2F').
+          VHOST_ENC=$(printf '%s' "$RABBIT_VHOST" | python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=""))')
 
           EXCHANGES=(
             "TailoredApps.KickGateway.Contracts.Events:ChatMessageSent"
@@ -66,39 +74,53 @@ jobs:
           )
 
           for ex in "${EXCHANGES[@]}"; do
-            echo "── Deleting exchange: $ex ──"
-            $SSH_CMD "docker exec $RABBIT_CT rabbitmqadmin \
-              --username='$RABBIT_USER' --password='$RABBIT_PASS' \
-              --vhost='$RABBIT_VHOST' \
-              delete exchange name='$ex'" || echo "(not present or already gone, continuing)"
+            EX_ENC=$(printf '%s' "$ex" | python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=""))')
+            URL="http://${RABBIT_HOST}:15672/api/exchanges/${VHOST_ENC}/${EX_ENC}"
+            echo "── DELETE $ex ──"
+            STATUS=$($SSH_CMD "curl -s -o /dev/null -w '%{http_code}' -u '$RABBIT_USER:$RABBIT_PASS' -X DELETE '$URL'")
+            case "$STATUS" in
+              204) echo "   ✓ deleted (204)";;
+              404) echo "   - not present (404), skipping";;
+              *)   echo "   ❌ unexpected HTTP $STATUS"; exit 1;;
+            esac
           done
 
-          echo "✅ Exchange cleanup pass complete"
+      - name: Verify exchanges are gone
+        env:
+          RABBIT_HOST: ${{ secrets.RABBITMQ_HOST }}
+          RABBIT_VHOST: ${{ secrets.RABBITMQ_VHOST }}
+          RABBIT_USER: ${{ secrets.RABBITMQ_USERNAME }}
+          RABBIT_PASS: ${{ secrets.RABBITMQ_PASSWORD }}
+        run: |
+          SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
+          VHOST_ENC=$(printf '%s' "$RABBIT_VHOST" | python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=""))')
+          echo "── Listing exchanges starting with 'TailoredApps' ──"
+          $SSH_CMD "curl -s -u '$RABBIT_USER:$RABBIT_PASS' 'http://${RABBIT_HOST}:15672/api/exchanges/${VHOST_ENC}' | python3 -c 'import json,sys; xs=[x for x in json.load(sys.stdin) if x[\"name\"].startswith(\"TailoredApps\")]; [print(x[\"name\"], x[\"type\"]) for x in xs]; sys.exit(1 if xs else 0)'"
+          echo "✅ All TailoredApps exchanges removed"
 
-      - name: Restart api+worker
+      - name: Start api+worker
         if: ${{ github.event.inputs.restart_containers == 'true' }}
         run: |
           SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
-          echo "── Restarting api+worker so they redeclare exchanges as topic ──"
-          $SSH_CMD "cd /opt/apps/kickgateway && docker compose restart api worker"
-          sleep 10
+          echo "── Starting api+worker ──"
+          $SSH_CMD "cd /opt/apps/kickgateway && docker compose start api worker"
+          echo "── Waiting 15s for MassTransit to declare exchanges ──"
+          sleep 15
           $SSH_CMD "cd /opt/apps/kickgateway && docker compose ps"
 
-      - name: Tail logs (10s) for sanity check
+      - name: Verify exchanges recreated as topic
         if: ${{ github.event.inputs.restart_containers == 'true' }}
+        env:
+          RABBIT_HOST: ${{ secrets.RABBITMQ_HOST }}
+          RABBIT_VHOST: ${{ secrets.RABBITMQ_VHOST }}
+          RABBIT_USER: ${{ secrets.RABBITMQ_USERNAME }}
+          RABBIT_PASS: ${{ secrets.RABBITMQ_PASSWORD }}
         run: |
           SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
-          echo "── api logs (last 30) ──"
-          $SSH_CMD "cd /opt/apps/kickgateway && docker compose logs --tail 30 api" || true
-          echo "── worker logs (last 30) ──"
-          $SSH_CMD "cd /opt/apps/kickgateway && docker compose logs --tail 30 worker" || true
-
-          echo "── searching for residual PRECONDITION_FAILED in last 80 lines ──"
-          if $SSH_CMD "cd /opt/apps/kickgateway && docker compose logs --tail 80 api worker | grep -q 'PRECONDITION_FAILED'"; then
-            echo "❌ Still seeing PRECONDITION_FAILED in logs — exchanges may have been recreated already by mid-flight retries. Re-run this workflow."
-            exit 1
-          fi
-          echo "✅ No PRECONDITION_FAILED in recent logs"
+          VHOST_ENC=$(printf '%s' "$RABBIT_VHOST" | python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=""))')
+          echo "── Exchanges starting with 'TailoredApps' (expect type=topic) ──"
+          $SSH_CMD "curl -s -u '$RABBIT_USER:$RABBIT_PASS' 'http://${RABBIT_HOST}:15672/api/exchanges/${VHOST_ENC}' | python3 -c 'import json,sys; xs=[x for x in json.load(sys.stdin) if x[\"name\"].startswith(\"TailoredApps\")]; [print(x[\"name\"], x[\"type\"]) for x in xs]; bad=[x for x in xs if x[\"type\"] != \"topic\"]; sys.exit(1 if bad or not xs else 0)'"
+          echo "✅ All TailoredApps exchanges are type=topic"
 
       - name: Cleanup
         if: always()
