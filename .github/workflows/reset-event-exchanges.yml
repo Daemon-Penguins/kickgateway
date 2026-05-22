@@ -1,4 +1,4 @@
-name: 🧹 Fix stale fanout exchanges (one-shot)
+name: Reset event exchanges (one-shot)
 
 # Manual-trigger workflow that resolves the post-migration topology mismatch
 # where RabbitMQ holds the old fanout exchanges from before topic-routing
@@ -13,16 +13,7 @@ name: 🧹 Fix stale fanout exchanges (one-shot)
 #   5. Verify the new exchanges exist and are type=topic.
 
 on:
-  workflow_dispatch:
-    inputs:
-      restart_containers:
-        description: 'Stop containers, fix, then start them again'
-        required: true
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
+  workflow_dispatch: {}
 
 jobs:
   fix:
@@ -42,24 +33,20 @@ jobs:
         run: |
           SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
 
-          # Find the running rabbitmq container by image name (works regardless
-          # of compose project / container name suffix).
-          RABBIT_NAME=$($SSH_CMD "docker ps --filter 'ancestor=rabbitmq:4.3-management' --format '{{.Names}}' | head -1")
+          # Find the running rabbitmq container by image. Works regardless of
+          # compose project / container-name suffix.
+          RABBIT_NAME=$($SSH_CMD "docker ps --format '{{.Names}}\t{{.Image}}' | awk '\$2 ~ /^rabbitmq/ {print \$1; exit}'")
           if [ -z "$RABBIT_NAME" ]; then
-            # Fall back to any image starting with 'rabbitmq'
-            RABBIT_NAME=$($SSH_CMD "docker ps --format '{{.Names}}\t{{.Image}}' | awk '\$2 ~ /^rabbitmq/ {print \$1; exit}'")
-          fi
-          if [ -z "$RABBIT_NAME" ]; then
-            echo "❌ No running rabbitmq container found on the VPS"
+            echo "::error::No running rabbitmq container found on the VPS"
             $SSH_CMD "docker ps --format '  {{.Names}} ({{.Image}})'"
             exit 1
           fi
 
-          # Pick any network the rabbit container is attached to. Docker DNS
-          # within that network will resolve the rabbit container's name.
+          # Pick the first docker network the rabbit container is attached to.
+          # Inside that network docker DNS resolves the container's own name.
           RABBIT_NET=$($SSH_CMD "docker inspect $RABBIT_NAME --format '{{range \$k, \$_ := .NetworkSettings.Networks}}{{\$k}} {{end}}' | awk '{print \$1}'")
           if [ -z "$RABBIT_NET" ]; then
-            echo "❌ Could not determine docker network for $RABBIT_NAME"
+            echo "::error::Could not determine docker network for $RABBIT_NAME"
             exit 1
           fi
 
@@ -68,7 +55,6 @@ jobs:
           echo "Using container: $RABBIT_NAME on network: $RABBIT_NET"
 
       - name: Stop api+worker (avoid race)
-        if: ${{ github.event.inputs.restart_containers == 'true' }}
         run: |
           SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
           echo "── Stopping api+worker before broker cleanup ──"
@@ -101,26 +87,16 @@ jobs:
             "TailoredApps.KickGateway.Contracts.Events:KickEventUnknown"
           )
 
-          # Helper: run a curl command via curlimages/curl on the rabbit's
-          # docker network. The broker is reachable by container name on
-          # port 15672 within that network.
-          # $1: curl args (as a single string)
-          curl_in_net() {
-            $SSH_CMD "docker run --rm --network '$RABBIT_NET' curlimages/curl:8.10.1 -s $1"
-          }
-
           for ex in "${EXCHANGES[@]}"; do
             EX_ENC=$(printf '%s' "$ex" | python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=""))')
             URL="http://${RABBIT_NAME}:15672/api/exchanges/${VHOST_ENC}/${EX_ENC}"
             echo "── DELETE $ex ──"
-            # curl exits non-zero on transport errors; we want HTTP code instead.
-            # `|| true` keeps the pipeline alive so we can read $STATUS.
-            STATUS=$(curl_in_net "-o /dev/null -w '%{http_code}' -u '$RABBIT_USER:$RABBIT_PASS' -X DELETE '$URL'" || echo "ERR")
+            STATUS=$($SSH_CMD "docker run --rm --network '$RABBIT_NET' curlimages/curl:8.10.1 -s -o /dev/null -w '%{http_code}' -u '$RABBIT_USER:$RABBIT_PASS' -X DELETE '$URL'" || echo "ERR")
             case "$STATUS" in
               204) echo "   ✓ deleted (204)";;
               404) echo "   - not present (404), skipping";;
-              ERR) echo "   ❌ curl transport error"; exit 1;;
-              *)   echo "   ❌ unexpected HTTP $STATUS"; exit 1;;
+              ERR) echo "::error::curl transport error"; exit 1;;
+              *)   echo "::error::unexpected HTTP $STATUS"; exit 1;;
             esac
           done
 
@@ -145,7 +121,6 @@ sys.exit(1 if xs else 0)'
           echo "✅ All TailoredApps exchanges removed"
 
       - name: Start api+worker
-        if: ${{ github.event.inputs.restart_containers == 'true' }}
         run: |
           SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
           echo "── Starting api+worker ──"
@@ -155,7 +130,6 @@ sys.exit(1 if xs else 0)'
           $SSH_CMD "cd /opt/apps/kickgateway && docker compose ps"
 
       - name: Verify exchanges recreated as topic
-        if: ${{ github.event.inputs.restart_containers == 'true' }}
         env:
           RABBIT_VHOST: ${{ secrets.RABBITMQ_VHOST }}
           RABBIT_USER: ${{ secrets.RABBITMQ_USERNAME }}
@@ -174,10 +148,10 @@ for x in xs:
     print(" ", x["name"], "type=" + x["type"])
 bad = [x for x in xs if x["type"] != "topic"]
 if not xs:
-    print("❌ No TailoredApps exchanges found at all — api+worker may have failed to start.")
+    print("::error::No TailoredApps exchanges found — api+worker may have failed to start.")
     sys.exit(1)
 if bad:
-    print("❌ Some exchanges are still not topic.")
+    print("::error::Some exchanges are still not topic.")
     sys.exit(1)'
           echo "✅ All TailoredApps exchanges are type=topic"
 
