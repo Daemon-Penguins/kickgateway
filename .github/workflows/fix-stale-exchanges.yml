@@ -5,13 +5,12 @@ name: 🧹 Fix stale fanout exchanges (one-shot)
 # was introduced. Sequence:
 #
 #   1. Stop api+worker so nothing is racing to redeclare exchanges.
-#   2. Delete the 11 stale exchanges via the RabbitMQ HTTP API.
+#   2. Delete the 11 stale exchanges via the RabbitMQ HTTP API, run from
+#      inside a one-shot curl container attached to the broker's docker
+#      network (so we don't depend on host DNS reaching the broker).
 #   3. Verify they are gone.
 #   4. Start api+worker; MassTransit redeclares them as topic on first use.
 #   5. Verify the new exchanges exist and are type=topic.
-#
-# Idempotent (re-running after success is a no-op apart from a container
-# restart).
 
 on:
   workflow_dispatch:
@@ -38,6 +37,36 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
+      - name: Discover broker container + network
+        id: rabbit
+        run: |
+          SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
+
+          # Find the running rabbitmq container by image name (works regardless
+          # of compose project / container name suffix).
+          RABBIT_NAME=$($SSH_CMD "docker ps --filter 'ancestor=rabbitmq:4.3-management' --format '{{.Names}}' | head -1")
+          if [ -z "$RABBIT_NAME" ]; then
+            # Fall back to any image starting with 'rabbitmq'
+            RABBIT_NAME=$($SSH_CMD "docker ps --format '{{.Names}}\t{{.Image}}' | awk '\$2 ~ /^rabbitmq/ {print \$1; exit}'")
+          fi
+          if [ -z "$RABBIT_NAME" ]; then
+            echo "❌ No running rabbitmq container found on the VPS"
+            $SSH_CMD "docker ps --format '  {{.Names}} ({{.Image}})'"
+            exit 1
+          fi
+
+          # Pick any network the rabbit container is attached to. Docker DNS
+          # within that network will resolve the rabbit container's name.
+          RABBIT_NET=$($SSH_CMD "docker inspect $RABBIT_NAME --format '{{range \$k, \$_ := .NetworkSettings.Networks}}{{\$k}} {{end}}' | awk '{print \$1}'")
+          if [ -z "$RABBIT_NET" ]; then
+            echo "❌ Could not determine docker network for $RABBIT_NAME"
+            exit 1
+          fi
+
+          echo "rabbit_name=$RABBIT_NAME" >> "$GITHUB_OUTPUT"
+          echo "rabbit_net=$RABBIT_NET" >> "$GITHUB_OUTPUT"
+          echo "Using container: $RABBIT_NAME on network: $RABBIT_NET"
+
       - name: Stop api+worker (avoid race)
         if: ${{ github.event.inputs.restart_containers == 'true' }}
         run: |
@@ -47,16 +76,15 @@ jobs:
 
       - name: Delete stale exchanges via RabbitMQ HTTP API
         env:
-          RABBIT_HOST: ${{ secrets.RABBITMQ_HOST }}
           RABBIT_VHOST: ${{ secrets.RABBITMQ_VHOST }}
           RABBIT_USER: ${{ secrets.RABBITMQ_USERNAME }}
           RABBIT_PASS: ${{ secrets.RABBITMQ_PASSWORD }}
+          RABBIT_NAME: ${{ steps.rabbit.outputs.rabbit_name }}
+          RABBIT_NET: ${{ steps.rabbit.outputs.rabbit_net }}
         run: |
           SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
 
-          # The mgmt API listens on 15672; reach it from inside the VPS so we
-          # don't need to expose it publicly.
-          # vhost goes URL-encoded ('/' → '%2F').
+          # URL-encode the vhost ('/' → '%2F').
           VHOST_ENC=$(printf '%s' "$RABBIT_VHOST" | python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=""))')
 
           EXCHANGES=(
@@ -73,29 +101,47 @@ jobs:
             "TailoredApps.KickGateway.Contracts.Events:KickEventUnknown"
           )
 
+          # Helper: run a curl command via curlimages/curl on the rabbit's
+          # docker network. The broker is reachable by container name on
+          # port 15672 within that network.
+          # $1: curl args (as a single string)
+          curl_in_net() {
+            $SSH_CMD "docker run --rm --network '$RABBIT_NET' curlimages/curl:8.10.1 -s $1"
+          }
+
           for ex in "${EXCHANGES[@]}"; do
             EX_ENC=$(printf '%s' "$ex" | python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=""))')
-            URL="http://${RABBIT_HOST}:15672/api/exchanges/${VHOST_ENC}/${EX_ENC}"
+            URL="http://${RABBIT_NAME}:15672/api/exchanges/${VHOST_ENC}/${EX_ENC}"
             echo "── DELETE $ex ──"
-            STATUS=$($SSH_CMD "curl -s -o /dev/null -w '%{http_code}' -u '$RABBIT_USER:$RABBIT_PASS' -X DELETE '$URL'")
+            # curl exits non-zero on transport errors; we want HTTP code instead.
+            # `|| true` keeps the pipeline alive so we can read $STATUS.
+            STATUS=$(curl_in_net "-o /dev/null -w '%{http_code}' -u '$RABBIT_USER:$RABBIT_PASS' -X DELETE '$URL'" || echo "ERR")
             case "$STATUS" in
               204) echo "   ✓ deleted (204)";;
               404) echo "   - not present (404), skipping";;
+              ERR) echo "   ❌ curl transport error"; exit 1;;
               *)   echo "   ❌ unexpected HTTP $STATUS"; exit 1;;
             esac
           done
 
       - name: Verify exchanges are gone
         env:
-          RABBIT_HOST: ${{ secrets.RABBITMQ_HOST }}
           RABBIT_VHOST: ${{ secrets.RABBITMQ_VHOST }}
           RABBIT_USER: ${{ secrets.RABBITMQ_USERNAME }}
           RABBIT_PASS: ${{ secrets.RABBITMQ_PASSWORD }}
+          RABBIT_NAME: ${{ steps.rabbit.outputs.rabbit_name }}
+          RABBIT_NET: ${{ steps.rabbit.outputs.rabbit_net }}
         run: |
           SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
           VHOST_ENC=$(printf '%s' "$RABBIT_VHOST" | python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=""))')
-          echo "── Listing exchanges starting with 'TailoredApps' ──"
-          $SSH_CMD "curl -s -u '$RABBIT_USER:$RABBIT_PASS' 'http://${RABBIT_HOST}:15672/api/exchanges/${VHOST_ENC}' | python3 -c 'import json,sys; xs=[x for x in json.load(sys.stdin) if x[\"name\"].startswith(\"TailoredApps\")]; [print(x[\"name\"], x[\"type\"]) for x in xs]; sys.exit(1 if xs else 0)'"
+
+          echo "── Listing exchanges starting with 'TailoredApps' (expect: none) ──"
+          BODY=$($SSH_CMD "docker run --rm --network '$RABBIT_NET' curlimages/curl:8.10.1 -s -u '$RABBIT_USER:$RABBIT_PASS' 'http://${RABBIT_NAME}:15672/api/exchanges/${VHOST_ENC}'")
+          echo "$BODY" | python3 -c 'import json, sys
+xs = [x for x in json.load(sys.stdin) if x["name"].startswith("TailoredApps")]
+for x in xs:
+    print(" ", x["name"], "type=" + x["type"])
+sys.exit(1 if xs else 0)'
           echo "✅ All TailoredApps exchanges removed"
 
       - name: Start api+worker
@@ -104,22 +150,35 @@ jobs:
           SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
           echo "── Starting api+worker ──"
           $SSH_CMD "cd /opt/apps/kickgateway && docker compose start api worker"
-          echo "── Waiting 15s for MassTransit to declare exchanges ──"
-          sleep 15
+          echo "── Waiting 20s for MassTransit to declare exchanges ──"
+          sleep 20
           $SSH_CMD "cd /opt/apps/kickgateway && docker compose ps"
 
       - name: Verify exchanges recreated as topic
         if: ${{ github.event.inputs.restart_containers == 'true' }}
         env:
-          RABBIT_HOST: ${{ secrets.RABBITMQ_HOST }}
           RABBIT_VHOST: ${{ secrets.RABBITMQ_VHOST }}
           RABBIT_USER: ${{ secrets.RABBITMQ_USERNAME }}
           RABBIT_PASS: ${{ secrets.RABBITMQ_PASSWORD }}
+          RABBIT_NAME: ${{ steps.rabbit.outputs.rabbit_name }}
+          RABBIT_NET: ${{ steps.rabbit.outputs.rabbit_net }}
         run: |
           SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
           VHOST_ENC=$(printf '%s' "$RABBIT_VHOST" | python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.stdin.read(), safe=""))')
+
           echo "── Exchanges starting with 'TailoredApps' (expect type=topic) ──"
-          $SSH_CMD "curl -s -u '$RABBIT_USER:$RABBIT_PASS' 'http://${RABBIT_HOST}:15672/api/exchanges/${VHOST_ENC}' | python3 -c 'import json,sys; xs=[x for x in json.load(sys.stdin) if x[\"name\"].startswith(\"TailoredApps\")]; [print(x[\"name\"], x[\"type\"]) for x in xs]; bad=[x for x in xs if x[\"type\"] != \"topic\"]; sys.exit(1 if bad or not xs else 0)'"
+          BODY=$($SSH_CMD "docker run --rm --network '$RABBIT_NET' curlimages/curl:8.10.1 -s -u '$RABBIT_USER:$RABBIT_PASS' 'http://${RABBIT_NAME}:15672/api/exchanges/${VHOST_ENC}'")
+          echo "$BODY" | python3 -c 'import json, sys
+xs = [x for x in json.load(sys.stdin) if x["name"].startswith("TailoredApps")]
+for x in xs:
+    print(" ", x["name"], "type=" + x["type"])
+bad = [x for x in xs if x["type"] != "topic"]
+if not xs:
+    print("❌ No TailoredApps exchanges found at all — api+worker may have failed to start.")
+    sys.exit(1)
+if bad:
+    print("❌ Some exchanges are still not topic.")
+    sys.exit(1)'
           echo "✅ All TailoredApps exchanges are type=topic"
 
       - name: Cleanup
