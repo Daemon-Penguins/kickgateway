@@ -13,8 +13,11 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  API_IMAGE: nieprzecietnykowalski/kickgateway-api
-  WORKER_IMAGE: nieprzecietnykowalski/kickgateway-worker
+  # Docker Hub namespace is read from a repo variable so forks can substitute
+  # their own. Set `DOCKERHUB_NAMESPACE` under repo Variables (not Secrets —
+  # it's not sensitive but it does identify the owner).
+  API_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-api
+  WORKER_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-worker
 
 jobs:
   build-and-push:
@@ -58,7 +61,7 @@ jobs:
           cache-to: type=gha,scope=worker,mode=max
 
   deploy:
-    name: 🖥️ Deploy to hq-config
+    name: 🖥️ Deploy to VPS
     runs-on: ubuntu-latest
     needs: build-and-push
     environment: production
@@ -92,7 +95,7 @@ jobs:
 
           services:
             api:
-              image: nieprzecietnykowalski/kickgateway-api:latest
+              image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-api:latest
               restart: unless-stopped
               environment:
                 - ASPNETCORE_ENVIRONMENT=Production
@@ -104,24 +107,25 @@ jobs:
                 - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
                 - Kick__AuthBaseUrl=https://id.kick.com
                 - Kick__ApiBaseUrl=https://api.kick.com
-                - Kick__WebhookUrl=https://kickgateway.madagascar.net.pl/api/webhooks/kick
+                - Kick__WebhookUrl=${KICK_WEBHOOK_URL:-}
                 - Kick__PublicKeyCacheMinutes=60
+                - Seed__SuperAdminUsername=${SEED_SUPERADMIN_USERNAME:-}
               networks:
                 - default
                 - traefik-public
                 - db-internal
               labels:
                 - "traefik.enable=true"
-                - "traefik.http.routers.kickgateway-api.rule=Host(`kickgateway.madagascar.net.pl`)"
+                - "traefik.http.routers.kickgateway-api.rule=Host(`${PUBLIC_HOST}`)"
                 - "traefik.http.routers.kickgateway-api.entrypoints=websecure"
                 - "traefik.http.routers.kickgateway-api.tls=true"
                 - "traefik.http.routers.kickgateway-api.tls.certresolver=letsencrypt-dns"
-                - "traefik.http.routers.kickgateway-api.tls.domains[0].main=kickgateway.madagascar.net.pl"
+                - "traefik.http.routers.kickgateway-api.tls.domains[0].main=${PUBLIC_HOST}"
                 - "traefik.http.services.kickgateway-api.loadbalancer.server.port=8080"
                 - "traefik.docker.network=traefik-public"
 
             worker:
-              image: nieprzecietnykowalski/kickgateway-worker:latest
+              image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-worker:latest
               restart: unless-stopped
               depends_on:
                 - api
@@ -149,9 +153,12 @@ jobs:
           RABBITMQ_VHOST=${{ secrets.RABBITMQ_VHOST }}
           RABBITMQ_USERNAME=${{ secrets.RABBITMQ_USERNAME }}
           RABBITMQ_PASSWORD=${{ secrets.RABBITMQ_PASSWORD }}
+          KICK_WEBHOOK_URL=${{ secrets.KICK_WEBHOOK_URL }}
+          SEED_SUPERADMIN_USERNAME=${{ secrets.SEED_SUPERADMIN_USERNAME }}
+          PUBLIC_HOST=${{ secrets.PUBLIC_HOST }}
           ENVFILE"
 
-          # Ensure shared networks exist (idempotent — created by hq-config first run)
+          # Ensure shared external networks exist (idempotent).
           $SSH_CMD "docker network create traefik-public 2>/dev/null || true"
           $SSH_CMD "docker network create db-internal 2>/dev/null || true"
 
@@ -165,6 +172,8 @@ jobs:
           $SSH_CMD "cd /opt/apps/kickgateway && docker compose ps"
 
       - name: Health check
+        env:
+          PUBLIC_HOST: ${{ secrets.PUBLIC_HOST }}
         run: |
           sleep 20
           SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}"
@@ -182,8 +191,8 @@ jobs:
           fi
 
           echo "── HTTPS smoke (admin root) ──"
-          STATUS=$(curl -ks -o /dev/null -w "%{http_code}" https://kickgateway.madagascar.net.pl/)
-          echo "https://kickgateway.madagascar.net.pl/ -> HTTP $STATUS"
+          STATUS=$(curl -ks -o /dev/null -w "%{http_code}" "https://${PUBLIC_HOST}/")
+          echo "https://${PUBLIC_HOST}/ -> HTTP $STATUS"
           if [ "$STATUS" != "200" ] && [ "$STATUS" != "302" ]; then
             echo "❌ Admin root did not return 200/302, dumping api logs:"
             $SSH_CMD "cd /opt/apps/kickgateway && docker compose logs --tail 30 api"
@@ -191,16 +200,16 @@ jobs:
           fi
 
           echo "── Health endpoint ──"
-          HEALTH=$(curl -ks -o /dev/null -w "%{http_code}" https://kickgateway.madagascar.net.pl/health)
-          echo "https://kickgateway.madagascar.net.pl/health -> HTTP $HEALTH"
+          HEALTH=$(curl -ks -o /dev/null -w "%{http_code}" "https://${PUBLIC_HOST}/health")
+          echo "https://${PUBLIC_HOST}/health -> HTTP $HEALTH"
           # /health only exposed in Development per service defaults — accept 200 or 404.
           if [ "$HEALTH" != "200" ] && [ "$HEALTH" != "404" ]; then
             echo "⚠️ Unexpected /health status — investigate"
           fi
 
           echo "── Admin UI ──"
-          ADMIN=$(curl -ks -o /dev/null -w "%{http_code}" https://kickgateway.madagascar.net.pl/admin)
-          echo "https://kickgateway.madagascar.net.pl/admin -> HTTP $ADMIN"
+          ADMIN=$(curl -ks -o /dev/null -w "%{http_code}" "https://${PUBLIC_HOST}/admin")
+          echo "https://${PUBLIC_HOST}/admin -> HTTP $ADMIN"
           if [ "$ADMIN" != "200" ]; then
             echo "❌ /admin did not return 200"
             $SSH_CMD "cd /opt/apps/kickgateway && docker compose logs --tail 30 api"
@@ -208,7 +217,7 @@ jobs:
           fi
 
           echo "── Webhook endpoint (expects 400/401 without proper signature, NOT 5xx) ──"
-          WH=$(curl -ks -o /dev/null -w "%{http_code}" -X POST https://kickgateway.madagascar.net.pl/api/webhooks/kick -H "Content-Type: application/json" -d '{}')
+          WH=$(curl -ks -o /dev/null -w "%{http_code}" -X POST "https://${PUBLIC_HOST}/api/webhooks/kick" -H "Content-Type: application/json" -d '{}')
           echo "POST /api/webhooks/kick (empty) -> HTTP $WH"
           if [ "$WH" = "500" ] || [ "$WH" = "502" ] || [ "$WH" = "503" ] || [ "$WH" = "504" ]; then
             echo "❌ Webhook endpoint returning 5xx — pipeline crash"

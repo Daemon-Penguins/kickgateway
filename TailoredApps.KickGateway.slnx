@@ -6,5 +6,8 @@
     <Project Path="src/TailoredApps.KickGateway.Contracts/TailoredApps.KickGateway.Contracts.csproj" />
     <Project Path="src/TailoredApps.KickGateway.ServiceDefaults/TailoredApps.KickGateway.ServiceDefaults.csproj" />
     <Project Path="src/TailoredApps.KickGateway.Worker/TailoredApps.KickGateway.Worker.csproj" />
+    <Project Path="src/TailoredApps.KickGateway.Subscribers.Loyalty/TailoredApps.KickGateway.Subscribers.Loyalty.csproj" />
+    <Project Path="src/TailoredApps.KickGateway.Subscribers.Alerts/TailoredApps.KickGateway.Subscribers.Alerts.csproj" />
+    <Project Path="src/TailoredApps.KickGateway.Subscribers.Analytics/TailoredApps.KickGateway.Subscribers.Analytics.csproj" />
   </Folder>
 </Solution>

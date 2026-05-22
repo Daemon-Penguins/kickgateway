@@ -19,6 +19,9 @@
   <ItemGroup>
     <ProjectReference Include="..\TailoredApps.KickGateway.Api\TailoredApps.KickGateway.Api.csproj" />
     <ProjectReference Include="..\TailoredApps.KickGateway.Worker\TailoredApps.KickGateway.Worker.csproj" />
+    <ProjectReference Include="..\TailoredApps.KickGateway.Subscribers.Loyalty\TailoredApps.KickGateway.Subscribers.Loyalty.csproj" />
+    <ProjectReference Include="..\TailoredApps.KickGateway.Subscribers.Alerts\TailoredApps.KickGateway.Subscribers.Alerts.csproj" />
+    <ProjectReference Include="..\TailoredApps.KickGateway.Subscribers.Analytics\TailoredApps.KickGateway.Subscribers.Analytics.csproj" />
   </ItemGroup>
 
 </Project>

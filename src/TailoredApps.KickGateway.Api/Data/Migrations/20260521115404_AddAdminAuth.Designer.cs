@@ -245,7 +245,7 @@ namespace TailoredApps.KickGateway.Api.Data.Migrations
                             IsEnabled = true,
                             KickUserId = "",
                             UpdatedAt = new DateTime(2026, 5, 21, 0, 0, 0, 0, DateTimeKind.Utc),
-                            Username = "nieprzecietny_kowalski"
+                            Username = "superadmin"
                         });
                 });
 

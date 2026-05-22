@@ -1,30 +1,29 @@
 # Kick Gateway
 
-> Pełna dokumentacja projektowa, ADR-y i runbooki są w Obsidian Vaulcie
-> użytkownika: `D:\Obsidian\nieprzecietny\10_Tematy\kickgateway\` +
-> `D:\Obsidian\nieprzecietny\20_Repozytoria\kickgateway.md`. Patrz też
-> `CLAUDE.md` w roocie tego repo.
-
-Webhook gateway that ingests Kick.com events for many broadcasters under many
-Kick developer apps and republishes them to RabbitMQ via MassTransit.
-Downstream services subscribe to typed contracts in
+Webhook gateway that ingests [Kick.com](https://kick.com) events for many
+broadcasters under many Kick developer apps and republishes them to RabbitMQ
+via MassTransit. Downstream services subscribe to typed contracts in
 `TailoredApps.KickGateway.Contracts` without ever touching the Kick API.
 
-**Prod:** https://kickgateway.madagascar.net.pl (deployed on hq-config —
-shared SQL Server + RabbitMQ on WireGuard VPN, Traefik public TLS).
+Per-channel filtering is built in: each downstream subscriber binds its queues
+to one or more broadcaster slugs (or `#` for the firehose), so the broker
+filters at delivery time and the consumer never sees messages from channels it
+doesn't care about. See `docs/CLIENT-INTEGRATION.md`.
 
 ## What's in the box
 
 ```
 src/
-  TailoredApps.Integrations.Kick/        # Kick REST + OAuth (PKCE) + sig-verify client.
-  TailoredApps.KickGateway.Contracts/    # MassTransit message contracts (shared lib).
-  TailoredApps.KickGateway.Api/          # WebAPI + Blazor admin + webhook receiver. Dockerfile here.
-  TailoredApps.KickGateway.Worker/       # Sample subscriber (logs every contract). Dockerfile here.
-  TailoredApps.KickGateway.AppHost/      # Aspire orchestrator (F5 from VS).
-  TailoredApps.KickGateway.ServiceDefaults/  # OTel + health + resilience.
-docker/docker-compose.yml                # RabbitMQ + SQL Server (dev fallback).
-.github/workflows/deploy.yml             # Build → push Docker images → deploy to hq-config.
+  TailoredApps.Integrations.Kick/             # Kick REST + OAuth (PKCE) + sig-verify client.
+  TailoredApps.KickGateway.Contracts/         # MassTransit message contracts + topology helper (shared lib).
+  TailoredApps.KickGateway.Api/               # WebAPI + Blazor admin + webhook receiver. Dockerfile here.
+  TailoredApps.KickGateway.Worker/            # Sample subscriber, all channels (logs every contract). Dockerfile here.
+  TailoredApps.KickGateway.Subscribers.*/     # Three sample apps demonstrating per-channel filtering.
+  TailoredApps.KickGateway.AppHost/           # .NET Aspire orchestrator (F5 from VS).
+  TailoredApps.KickGateway.ServiceDefaults/   # OTel + health + resilience.
+docker/docker-compose.yml                     # RabbitMQ + SQL Server (dev fallback).
+docs/CLIENT-INTEGRATION.md                    # How to write a downstream subscriber.
+.github/workflows/deploy.yml                  # Build → push Docker images → deploy via SSH.
 ```
 
 ## Architecture
@@ -42,10 +41,10 @@ docker/docker-compose.yml                # RabbitMQ + SQL Server (dev fallback).
   `AddEntityFrameworkOutbox<KickGatewayDbContext>` — the message only
   leaves the DB once the inbox row commits. No publish-without-record drift
   and vice-versa.
-- **Topology.** MassTransit auto-creates one topic exchange per published
-  contract and lets each consumer queue bind to it. Workers can scale
-  horizontally; consumers on the same queue compete; new contracts only need
-  a new consumer class.
+- **Topology.** One **topic** exchange per published contract; the
+  broadcaster slug is the routing key. Each subscriber binds its durable
+  queue to the channels it cares about (or `#` for all). Workers can scale
+  horizontally; consumers on the same queue compete.
 
 ## Quick start
 
@@ -56,8 +55,8 @@ as the startup project, and F5. The AppHost:
 
 - starts SQL Server + RabbitMQ in containers (with the management UI exposed)
 - injects `ConnectionStrings:KickGateway` into the Api and `RabbitMq:*` into
-  both Api and Worker
-- runs the Api + Worker side-by-side
+  every subscriber
+- runs the Api + Worker + three sample subscribers side-by-side
 - opens the Aspire dashboard (resources, logs, traces, metrics)
 
 From the CLI:
@@ -75,7 +74,7 @@ docker compose -f docker/docker-compose.yml up -d
 # 2. Apply schema (runs on first Api start automatically), or manually:
 dotnet ef database update --project src/TailoredApps.KickGateway.Api
 
-# 3. Run gateway + worker
+# 3. Run gateway + worker (and any sample subscriber you like)
 dotnet run --project src/TailoredApps.KickGateway.Api
 dotnet run --project src/TailoredApps.KickGateway.Worker
 ```
@@ -95,50 +94,69 @@ mapped to a typed contract, and published. The sample worker logs everything;
 your real subscribers can be in any process that references the contracts
 project.
 
-## Deploy (hq-config)
+## Deploy
 
-`.github/workflows/deploy.yml` builds two Docker images
-(`nieprzecietnykowalski/kickgateway-api`, `nieprzecietnykowalski/kickgateway-worker`),
-pushes to Docker Hub, and deploys to the hq-config VPS via SSH +
-`docker compose`. The compose stack joins two shared networks managed by
-[hq-config](https://github.com/Daemon-Penguins/hq-config):
+`.github/workflows/deploy.yml` builds two Docker images, pushes to Docker Hub,
+and deploys to a VPS via SSH + `docker compose`. The compose stack joins two
+shared external Docker networks:
 
-- `traefik-public` — Traefik handles TLS for `kickgateway.madagascar.net.pl`
-- `db-internal`   — reaches the shared SQL Server (`sqlserver:1433`)
+- `traefik-public` — Traefik handles TLS for `${PUBLIC_HOST}`
+- `db-internal`   — reaches the shared SQL Server
 
-### Required GitHub repo secrets
+### Required GitHub repo configuration
+
+**Variables** (Settings → Secrets and variables → Actions → Variables):
+
+| Variable | What |
+| --- | --- |
+| `DOCKERHUB_NAMESPACE` | Docker Hub user/org under which images are pushed (e.g. `myorg`) |
+
+**Secrets** (Settings → Secrets and variables → Actions → Secrets):
 
 | Secret | What |
 | --- | --- |
 | `DOCKERHUB_USER` / `DOCKERHUB_TOKEN` | push to Docker Hub |
 | `DEPLOY_HOST` / `DEPLOY_USER` / `DEPLOY_SSH_KEY` | SSH into the VPS |
-| `DB_CONNECTION_STRING` | `Server=sqlserver,1433;Database=kickgateway;User Id=…;Password=…;TrustServerCertificate=true;Encrypt=false` |
-| `RABBITMQ_HOST` / `RABBITMQ_PORT` / `RABBITMQ_VHOST` / `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | broker on hq-config (private vhost recommended) |
+| `PUBLIC_HOST` | Fully qualified hostname for the public URL (`example.com`) |
+| `KICK_WEBHOOK_URL` | Full webhook URL Kick will POST to (`https://example.com/api/webhooks/kick`) |
+| `DB_CONNECTION_STRING` | `Server=…,1433;Database=kickgateway;User Id=…;Password=…;TrustServerCertificate=true;Encrypt=false` |
+| `RABBITMQ_HOST` / `RABBITMQ_PORT` / `RABBITMQ_VHOST` / `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | broker (private vhost recommended) |
+| `SEED_SUPERADMIN_USERNAME` | Kick handle (lowercase) of the first super-admin. Used only on first deploy; ignored thereafter. |
 
 ### Pre-deploy operator checklist
 
-1. `kickgateway.madagascar.net.pl` DNS A record → VPS public IP.
-2. `kickgateway` database created on the shared SQL Server + a user with `db_owner` on it. EF migrations apply on first Api start.
-3. Kick dev portal: each `KickClientApp` row's RedirectUri set to `https://kickgateway.madagascar.net.pl/api/auth/kick/callback`, WebhookUrl set to `https://kickgateway.madagascar.net.pl/api/webhooks/kick`.
-4. RabbitMQ broker on hq-config is up (`ansible-playbook deploy-rabbitmq.yml` if not) and credentials are available.
+1. DNS A record for `${PUBLIC_HOST}` → VPS public IP.
+2. `kickgateway` database created on the SQL Server + a user with `db_owner` on it. EF migrations apply on first Api start.
+3. Kick dev portal: each `KickClientApp` row's RedirectUri set to `https://${PUBLIC_HOST}/api/auth/kick/callback`, WebhookUrl set to `https://${PUBLIC_HOST}/api/webhooks/kick`.
+4. RabbitMQ broker is up and credentials are available.
 
 ## Wiring a downstream subscriber
+
+See `docs/CLIENT-INTEGRATION.md` for the full guide. The short version:
 
 ```csharp
 services.AddMassTransit(x =>
 {
-    x.AddConsumer<MyChatHandler>();
-    x.SetKebabCaseEndpointNameFormatter();
+    x.AddConsumer<MyChatConsumer>();
     x.UsingRabbitMq((ctx, cfg) =>
     {
         cfg.Host("localhost", "/", h => { h.Username("guest"); h.Password("guest"); });
-        cfg.ConfigureEndpoints(ctx);
+
+        // Match the gateway's topology (topic exchanges per type).
+        KickEventTopology.ConfigurePublishTopology(cfg);
+
+        cfg.ReceiveEndpoint("myapp-chat", e =>
+        {
+            // Bind only to messages where BroadcasterSlug == "xqc".
+            KickEventTopology.BindKickEvent<ChatMessageSent>(e, "xqc");
+            e.ConfigureConsumer<MyChatConsumer>(ctx);
+        });
     });
 });
 
-public class MyChatHandler : IConsumer<ChatMessageSent>
+public class MyChatConsumer : IConsumer<ChatMessageSent>
 {
-    public Task Consume(ConsumeContext<ChatMessageSent> ctx) => ...;
+    public Task Consume(ConsumeContext<ChatMessageSent> ctx) => /* … */;
 }
 ```
 
@@ -152,3 +170,7 @@ public class MyChatHandler : IConsumer<ChatMessageSent>
   config, NOT what you send in the subscription body.
 - Public key rotates; `KickSignatureVerifier` retries once with a forced
   refresh on verification failure.
+
+## License
+
+MIT.

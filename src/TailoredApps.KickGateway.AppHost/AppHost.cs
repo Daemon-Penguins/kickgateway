@@ -7,7 +7,7 @@
 var builder = DistributedApplication.CreateBuilder(args);
 
 // SQL Server — name "KickGateway" matches the ConnectionString key the Api reads.
-// Production runs against the shared hq-config SQL Server (db-internal network).
+// Production runs against a shared SQL Server reached over a private network.
 var sql = builder.AddSqlServer("sqlserver")
     .WithDataVolume("kickgateway-sqlserver-data");
 
@@ -31,6 +31,35 @@ builder.AddProject<Projects.TailoredApps_KickGateway_Api>("kickgateway-api")
     .WithEnvironment("RabbitMq__Password", rabbit.Resource.PasswordParameter);
 
 builder.AddProject<Projects.TailoredApps_KickGateway_Worker>("kickgateway-worker")
+    .WithReference(rabbit)
+    .WaitFor(rabbit)
+    .WithEnvironment("RabbitMq__Host", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Host))
+    .WithEnvironment("RabbitMq__Port", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Port))
+    .WithEnvironment("RabbitMq__Username", rabbit.Resource.UserNameParameter!)
+    .WithEnvironment("RabbitMq__Password", rabbit.Resource.PasswordParameter);
+
+// Three independent subscriber apps. Each uses a unique kebab-case queue
+// prefix ("loyalty", "alerts", "analytics") so RabbitMQ creates three separate
+// durable queues bound to the same per-message-type fanout exchanges the
+// gateway publishes to. Result: every running subscriber gets every message;
+// while a subscriber is offline, its queue retains messages on disk.
+builder.AddProject<Projects.TailoredApps_KickGateway_Subscribers_Loyalty>("subscriber-loyalty")
+    .WithReference(rabbit)
+    .WaitFor(rabbit)
+    .WithEnvironment("RabbitMq__Host", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Host))
+    .WithEnvironment("RabbitMq__Port", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Port))
+    .WithEnvironment("RabbitMq__Username", rabbit.Resource.UserNameParameter!)
+    .WithEnvironment("RabbitMq__Password", rabbit.Resource.PasswordParameter);
+
+builder.AddProject<Projects.TailoredApps_KickGateway_Subscribers_Alerts>("subscriber-alerts")
+    .WithReference(rabbit)
+    .WaitFor(rabbit)
+    .WithEnvironment("RabbitMq__Host", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Host))
+    .WithEnvironment("RabbitMq__Port", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Port))
+    .WithEnvironment("RabbitMq__Username", rabbit.Resource.UserNameParameter!)
+    .WithEnvironment("RabbitMq__Password", rabbit.Resource.PasswordParameter);
+
+builder.AddProject<Projects.TailoredApps_KickGateway_Subscribers_Analytics>("subscriber-analytics")
     .WithReference(rabbit)
     .WaitFor(rabbit)
     .WithEnvironment("RabbitMq__Host", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Host))

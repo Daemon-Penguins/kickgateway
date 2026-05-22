@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>TailoredApps.KickGateway.Subscribers.Analytics</RootNamespace>
+    <UserSecretsId>tailoredapps-kickgateway-subscribers-analytics</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.*" />
+    <PackageReference Include="MassTransit" Version="8.*" />
+    <PackageReference Include="MassTransit.RabbitMQ" Version="8.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TailoredApps.KickGateway.Contracts\TailoredApps.KickGateway.Contracts.csproj" />
+    <ProjectReference Include="..\TailoredApps.KickGateway.ServiceDefaults\TailoredApps.KickGateway.ServiceDefaults.csproj" />
+  </ItemGroup>
+</Project>

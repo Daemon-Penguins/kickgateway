@@ -10,6 +10,8 @@ using TailoredApps.KickGateway.Api.Endpoints;
 using TailoredApps.KickGateway.Api.LiveFeed;
 using TailoredApps.KickGateway.Api.Services;
 using TailoredApps.KickGateway.Api.Webhooks;
+using TailoredApps.KickGateway.Contracts;
+using TailoredApps.KickGateway.Contracts.Events;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -92,6 +94,11 @@ builder.Services.AddMassTransit(x =>
             h.Password(rmq["Password"] ?? "guest");
         });
 
+        // Switch every Kick event from MassTransit's default fanout to a topic
+        // exchange with the broadcaster slug as the routing key. Subscribers
+        // can then bind to "#" (everything) or a specific slug.
+        KickEventTopology.ConfigurePublishTopology(cfg);
+
         // Live-feed queue: dedicated name + auto-delete + non-durable. Each API
         // replica gets its own queue (queue name suffixed with the host so two
         // replicas don't compete). Messages buffered for this queue while the
@@ -102,6 +109,20 @@ builder.Services.AddMassTransit(x =>
         {
             e.AutoDelete = true;
             e.Durable = false;
+
+            // Bind to EVERY channel — admin live feed needs the firehose.
+            KickEventTopology.BindKickEvent<ChatMessageSent>(e);
+            KickEventTopology.BindKickEvent<ChannelFollowed>(e);
+            KickEventTopology.BindKickEvent<ChannelSubscriptionNew>(e);
+            KickEventTopology.BindKickEvent<ChannelSubscriptionGifts>(e);
+            KickEventTopology.BindKickEvent<ChannelSubscriptionRenewal>(e);
+            KickEventTopology.BindKickEvent<LivestreamStatusUpdated>(e);
+            KickEventTopology.BindKickEvent<LivestreamMetadataUpdated>(e);
+            KickEventTopology.BindKickEvent<ModerationBanned>(e);
+            KickEventTopology.BindKickEvent<KicksGifted>(e);
+            KickEventTopology.BindKickEvent<ChannelRewardRedemptionUpdated>(e);
+            KickEventTopology.BindKickEvent<KickEventUnknown>(e);
+
             e.ConfigureConsumer<LiveFeedConsumer>(ctx);
         });
 
@@ -131,6 +152,23 @@ using (var scope = app.Services.CreateScope())
     await db.Database.MigrateAsync();
     var dp = scope.ServiceProvider.GetRequiredService<DataProtectionDbContext>();
     await dp.Database.MigrateAsync();
+
+    // Resolve the bootstrap super-admin username from env/config. The
+    // migration seeds a placeholder ("superadmin"); the first deploy overrides
+    // it with whoever owns the gateway. On subsequent restarts this is a
+    // no-op because the row's username will already differ from the
+    // placeholder.
+    var configured = app.Configuration["Seed:SuperAdminUsername"]?.Trim();
+    if (!string.IsNullOrWhiteSpace(configured))
+    {
+        var seedRow = await db.AdminUsers.FindAsync(KickGatewayDbContext.SeedSuperAdminId);
+        if (seedRow is not null && seedRow.Username == KickGatewayDbContext.SeedSuperAdminPlaceholderUsername)
+        {
+            seedRow.Username = configured;
+            seedRow.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+        }
+    }
 }
 
 if (app.Environment.IsDevelopment())

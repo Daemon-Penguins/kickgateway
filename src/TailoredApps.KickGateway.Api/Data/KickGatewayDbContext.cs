@@ -15,8 +15,13 @@ public class KickGatewayDbContext : DbContext
     public DbSet<AdminUser> AdminUsers => Set<AdminUser>();
     public DbSet<AdminUserRole> AdminUserRoles => Set<AdminUserRole>();
 
-    // Deterministic Guids for the bootstrap SuperAdmin so the EF migration is reproducible.
-    private static readonly Guid SeedSuperAdminId = new("11111111-1111-1111-1111-111111111111");
+    // Deterministic Guids for the bootstrap SuperAdmin so the EF migration is
+    // reproducible. The username on the seeded row is a placeholder
+    // ("superadmin"); the real username is set at startup from the
+    // SEED_SUPERADMIN_USERNAME env var (see Program.cs). Existing prod rows
+    // keep whatever username they already have.
+    public static readonly Guid SeedSuperAdminId = new("11111111-1111-1111-1111-111111111111");
+    public const string SeedSuperAdminPlaceholderUsername = "superadmin";
     private static readonly Guid SeedSuperAdminRoleId = new("22222222-2222-2222-2222-222222222222");
     private static readonly DateTime SeedTimestamp = new(2026, 5, 21, 0, 0, 0, DateTimeKind.Utc);
 
@@ -77,8 +82,8 @@ public class KickGatewayDbContext : DbContext
             b.HasData(new AdminUser
             {
                 Id = SeedSuperAdminId,
-                KickUserId = "",                 // resolved on first login
-                Username = "nieprzecietny_kowalski",
+                KickUserId = "",                                  // resolved on first login
+                Username = SeedSuperAdminPlaceholderUsername,     // overridden at startup from env var
                 IsEnabled = true,
                 CreatedAt = SeedTimestamp,
                 UpdatedAt = SeedTimestamp,
