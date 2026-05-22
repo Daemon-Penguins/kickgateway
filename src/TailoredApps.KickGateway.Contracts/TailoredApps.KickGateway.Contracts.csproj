@@ -6,24 +6,34 @@
     <RootNamespace>TailoredApps.KickGateway.Contracts</RootNamespace>
 
     <!-- NuGet / DLL distribution metadata.
-         Subscriber apps reference this assembly (DLL or NuGet) to get IConsumer<T>
-         on the same CLR types the gateway publishes — that's how MassTransit
-         matches the per-message-type RabbitMQ exchange (urn:message:Tailored
-         Apps.KickGateway.Contracts.Events:ChatMessageSent etc.). -->
+         Subscriber apps reference this assembly (DLL or NuGet) to get
+         IConsumer<T> on the same CLR types the gateway publishes — that's how
+         MassTransit matches the per-message-type RabbitMQ topic exchange
+         (urn:message:TailoredApps.KickGateway.Contracts.Events:ChatMessageSent
+         and friends). -->
     <PackageId>TailoredApps.KickGateway.Contracts</PackageId>
-    <Version>0.2.0</Version>
-    <Authors>Tailored Apps</Authors>
-    <Company>Tailored Apps</Company>
-    <Description>MassTransit message contracts published by the Kick Gateway. Reference this DLL/NuGet from any subscriber app to bind to the same RabbitMQ fanout exchanges the gateway publishes to.</Description>
-    <PackageTags>kick;masstransit;contracts;webhook;rabbitmq</PackageTags>
-    <PackageProjectUrl>https://github.com/tailored-apps/kickgateway</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/tailored-apps/kickgateway</RepositoryUrl>
+    <Version Condition="'$(Version)' == ''">0.2.0</Version>
+    <Authors>Daemon Penguins</Authors>
+    <Company>Daemon Penguins</Company>
+    <Description>MassTransit message contracts published by the Kick Gateway. Reference this package from any subscriber app to bind to the same RabbitMQ topic exchanges the gateway publishes to, with broadcaster slug as the routing key for per-channel filtering.</Description>
+    <PackageTags>kick;masstransit;contracts;webhook;rabbitmq;topic-routing</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/Daemon-Penguins/kickgateway</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Daemon-Penguins/kickgateway</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- Contracts ships a small topology helper that wires the broadcaster

@@ -130,6 +130,43 @@ shared external Docker networks:
 3. Kick dev portal: each `KickClientApp` row's RedirectUri set to `https://${PUBLIC_HOST}/api/auth/kick/callback`, WebhookUrl set to `https://${PUBLIC_HOST}/api/webhooks/kick`.
 4. RabbitMQ broker is up and credentials are available.
 
+## Consuming the contracts package
+
+The `TailoredApps.KickGateway.Contracts` package is published to **GitHub
+Packages** on every push to main that touches the contracts project. Version
+scheme: `0.2.<github-run-number>` — strictly monotonic. Floating on `0.2.*`
+always pulls the newest.
+
+GitHub Packages requires auth even for public repos. Create a Personal Access
+Token (classic) with `read:packages` scope, then add a `nuget.config` next to
+your `.csproj`:
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <add key="github-daemon-penguins"
+         value="https://nuget.pkg.github.com/Daemon-Penguins/index.json" />
+  </packageSources>
+  <packageSourceCredentials>
+    <github-daemon-penguins>
+      <add key="Username" value="YOUR_GITHUB_USERNAME" />
+      <add key="ClearTextPassword" value="%GITHUB_PACKAGES_PAT%" />
+    </github-daemon-penguins>
+  </packageSourceCredentials>
+</configuration>
+```
+
+Then in your project:
+
+```bash
+dotnet add package TailoredApps.KickGateway.Contracts --version "0.2.*"
+```
+
+Don't commit a `nuget.config` containing a real token — use an env var
+(`%GITHUB_PACKAGES_PAT%` above) or `dotnet nuget update source ... --username
+... --password ... --store-password-in-clear-text` for CI.
+
 ## Wiring a downstream subscriber
 
 See `docs/CLIENT-INTEGRATION.md` for the full guide. The short version:
