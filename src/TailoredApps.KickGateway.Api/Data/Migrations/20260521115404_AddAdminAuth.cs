@@ -66,7 +66,7 @@ namespace TailoredApps.KickGateway.Api.Data.Migrations
             migrationBuilder.InsertData(
                 table: "AdminUsers",
                 columns: new[] { "Id", "CreatedAt", "Email", "IsEnabled", "KickUserId", "LastLoginAt", "UpdatedAt", "Username" },
-                values: new object[] { new Guid("11111111-1111-1111-1111-111111111111"), new DateTime(2026, 5, 21, 0, 0, 0, 0, DateTimeKind.Utc), null, true, "", null, new DateTime(2026, 5, 21, 0, 0, 0, 0, DateTimeKind.Utc), "nieprzecietny_kowalski" });
+                values: new object[] { new Guid("11111111-1111-1111-1111-111111111111"), new DateTime(2026, 5, 21, 0, 0, 0, 0, DateTimeKind.Utc), null, true, "", null, new DateTime(2026, 5, 21, 0, 0, 0, 0, DateTimeKind.Utc), "superadmin" });
 
             migrationBuilder.InsertData(
                 table: "AdminUserRoles",

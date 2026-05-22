@@ -1,7 +1,7 @@
 services:
   rabbitmq:
     # `3.13-management` resolves to 4.x on Docker Hub and crashes on first
-    # boot (Khepri vs Mnesia). Pin the explicit minor that worked on hq-config.
+    # boot (Khepri vs Mnesia). Pin an explicit minor known to start cleanly.
     image: rabbitmq:4.3-management
     container_name: kickgw-rabbitmq
     ports:
