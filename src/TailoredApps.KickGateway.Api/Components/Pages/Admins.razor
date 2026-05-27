@@ -43,6 +43,7 @@
             <tbody>
                 @foreach (var a in _admins)
                 {
+                    var grant = _grantInputs[a.Id];
                     <tr>
                         <td><strong>@a.Username</strong>@(string.IsNullOrEmpty(a.Email) ? null : new MarkupString($"<br /><span class='muted'>{a.Email}</span>"))</td>
                         <td>@(string.IsNullOrEmpty(a.KickUserId) ? new MarkupString("<span class='muted'>pending first login</span>") : new MarkupString($"<code>{a.KickUserId}</code>"))</td>
@@ -70,7 +71,7 @@
                             <div style="display:flex;gap:0.4rem;align-items:flex-end;flex-wrap:wrap;padding:0.3rem 0;">
                                 <label style="margin:0;">
                                     <span style="font-size:0.7rem;">Role</span>
-                                    <select @bind="_grantRole">
+                                    <select @bind="grant.Role">
                                         @foreach (var r in Enum.GetValues<AdminRole>())
                                         {
                                             <option value="@r">@r</option>
@@ -79,7 +80,7 @@
                                 </label>
                                 <label style="margin:0;">
                                     <span style="font-size:0.7rem;">Client (per-client roles only)</span>
-                                    <select @bind="_grantClientId">
+                                    <select @bind="grant.ClientId">
                                         <option value="@Guid.Empty">— (none / SuperAdmin)</option>
                                         @if (_clientApps is not null)
                                         {
@@ -105,8 +106,7 @@
     List<AdminUser>? _admins;
     List<KickClientApp>? _clientApps;
     NewAdminInput _new = new();
-    AdminRole _grantRole = AdminRole.ClientViewer;
-    Guid _grantClientId = Guid.Empty;
+    Dictionary<Guid, GrantInput> _grantInputs = new();
     string? _error;
 
     class NewAdminInput
@@ -116,6 +116,14 @@
         public string Email { get; set; } = "";
     }
 
+    // Per-admin grant form state, keyed by AdminUser.Id so each row binds to its
+    // own Role/Client selection instead of a single field shared across all rows.
+    class GrantInput
+    {
+        public AdminRole Role { get; set; } = AdminRole.ClientViewer;
+        public Guid ClientId { get; set; } = Guid.Empty;
+    }
+
     protected override async Task OnInitializedAsync() => await Reload();
 
     async Task Reload()
@@ -123,6 +131,10 @@
         await using var db = await DbFactory.CreateDbContextAsync();
         _admins = await db.AdminUsers.Include(x => x.Roles).OrderBy(x => x.Username).ToListAsync();
         _clientApps = await db.ClientApps.OrderBy(x => x.Name).ToListAsync();
+        // Ensure every admin has its own grant-form state; preserve in-progress
+        // selections for admins already present across reloads.
+        foreach (var a in _admins)
+            _grantInputs.TryAdd(a.Id, new GrantInput());
     }
 
     async Task OnAdd()
@@ -154,20 +166,22 @@
 
     async Task GrantRole(Guid userId)
     {
+        if (!_grantInputs.TryGetValue(userId, out var grant)) return;
+
         // Validate role+client invariant client-side; server already enforces it.
-        if (_grantRole == AdminRole.SuperAdmin && _grantClientId != Guid.Empty) { _error = "SuperAdmin is global — leave client unset."; return; }
-        if (_grantRole != AdminRole.SuperAdmin && _grantClientId == Guid.Empty) { _error = "Per-client roles require a client."; return; }
+        if (grant.Role == AdminRole.SuperAdmin && grant.ClientId != Guid.Empty) { _error = "SuperAdmin is global — leave client unset."; return; }
+        if (grant.Role != AdminRole.SuperAdmin && grant.ClientId == Guid.Empty) { _error = "Per-client roles require a client."; return; }
         _error = null;
 
         await using var db = await DbFactory.CreateDbContextAsync();
         var u = await db.AdminUsers.Include(x => x.Roles).FirstOrDefaultAsync(x => x.Id == userId);
         if (u is null) return;
-        Guid? clientId = _grantClientId == Guid.Empty ? null : _grantClientId;
-        if (u.Roles.Any(r => r.Role == _grantRole && r.KickClientAppId == clientId)) return;
+        Guid? clientId = grant.ClientId == Guid.Empty ? null : grant.ClientId;
+        if (u.Roles.Any(r => r.Role == grant.Role && r.KickClientAppId == clientId)) return;
         db.AdminUserRoles.Add(new AdminUserRole
         {
             AdminUserId = userId,
-            Role = _grantRole,
+            Role = grant.Role,
             KickClientAppId = clientId,
         });
         await db.SaveChangesAsync();
