@@ -1,0 +1,78 @@
+name: 📦 Publish Contracts NuGet package
+
+# Builds and publishes the TailoredApps.KickGateway.Contracts package to
+# GitHub Packages (https://github.com/Daemon-Penguins?tab=packages) on every
+# push to main that touches the contracts project or its README.
+#
+# Version scheme: 0.2.<github.run_number>.  github.run_number monotonically
+# increases per workflow on this repo, so every push produces a strictly
+# higher SemVer than the last. Consumers can float on 0.2.* to always pick up
+# the latest, or pin a specific 0.2.N for reproducibility.
+#
+# To publish to NuGet.org instead, add a `dotnet nuget push` step that points
+# at https://api.nuget.org/v3/index.json using a NUGET_API_KEY secret.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/TailoredApps.KickGateway.Contracts/**'
+      - '.github/workflows/publish-contracts.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: publish-contracts-${{ github.ref }}
+  cancel-in-progress: false   # don't cancel in-flight publishes; let them finish
+
+permissions:
+  contents: read
+  packages: write              # required to push to GitHub Packages
+
+jobs:
+  publish:
+    name: Pack & push to GitHub Packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VERSION: 0.2.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+
+      - name: Restore
+        run: dotnet restore src/TailoredApps.KickGateway.Contracts/TailoredApps.KickGateway.Contracts.csproj
+
+      - name: Build
+        run: dotnet build src/TailoredApps.KickGateway.Contracts/TailoredApps.KickGateway.Contracts.csproj -c Release --no-restore -p:Version=${{ env.VERSION }}
+
+      - name: Pack
+        run: dotnet pack src/TailoredApps.KickGateway.Contracts/TailoredApps.KickGateway.Contracts.csproj -c Release --no-build -o ./out -p:Version=${{ env.VERSION }}
+
+      - name: List output
+        run: ls -la ./out
+
+      - name: Push to GitHub Packages
+        run: |
+          dotnet nuget push "./out/*.nupkg" \
+            --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
+            --api-key "${{ secrets.GITHUB_TOKEN }}" \
+            --skip-duplicate
+
+      - name: Summary
+        run: |
+          echo "## Published version" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "TailoredApps.KickGateway.Contracts ${{ env.VERSION }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Install:" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo 'dotnet add package TailoredApps.KickGateway.Contracts --version ${{ env.VERSION }}' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "(Requires the GitHub Packages NuGet feed configured in your nuget.config — see repo README.)" >> "$GITHUB_STEP_SUMMARY"
