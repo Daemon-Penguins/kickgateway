@@ -10,8 +10,15 @@ using TailoredApps.KickGateway.Api.Data;
 
 namespace TailoredApps.KickGateway.Api.Services;
 
-/// <summary>A channel that is allowed to show clips on the public OBS page.</summary>
-public record ClipChannel(Guid Id, string Slug, string Username);
+/// <summary>A channel that is allowed to show clips on the public OBS page, plus its player settings.</summary>
+public record ClipChannel(
+    Guid Id,
+    string Slug,
+    string Username,
+    ClipsSortMode SortMode,
+    ClipsTimeWindow TimeWindow,
+    int LeadInCount,
+    bool Shuffle);
 
 /// <summary>
 /// Backs the public OBS clips endpoints. Responsibilities:
@@ -61,27 +68,37 @@ public class ClipsCatalogService
             .OrderByDescending(x => x.UpdatedAt)
             .FirstOrDefaultAsync(ct);
 
-        var result = b is null ? null : new ClipChannel(b.Id, b.ChannelSlug, b.Username);
+        var result = b is null
+            ? null
+            : new ClipChannel(b.Id, b.ChannelSlug, b.Username, b.ClipsSortMode, b.ClipsTimeWindow, b.ClipsLeadInCount, b.ClipsShuffle);
         _cache.Set(key, result, TimeSpan.FromSeconds(result is null ? 30 : 120));
         return result;
     }
 
-    /// <summary>Newest-first clip pool for a slug, cached with a single-flight lock to spare Cloudflare.</summary>
-    public async Task<IReadOnlyList<KickClip>> GetPoolAsync(string slug, CancellationToken ct)
+    /// <summary>Drop the cached channel settings so an admin edit takes effect immediately.</summary>
+    public void InvalidateChannel(string slug) => _cache.Remove($"clips:scope:{Normalize(slug)}");
+
+    /// <summary>
+    /// Clip pool for a slug in the channel's chosen order, cached (per sort+window)
+    /// with a single-flight lock to spare Cloudflare.
+    /// </summary>
+    public async Task<IReadOnlyList<KickClip>> GetPoolAsync(string slug, ClipsSortMode sortMode, ClipsTimeWindow timeWindow, CancellationToken ct)
     {
         slug = Normalize(slug);
-        var key = $"clips:pool:{slug}";
+        var sort = SortParam(sortMode);
+        var time = sortMode == ClipsSortMode.MostViewed ? TimeParam(timeWindow) : null;
+        var key = $"clips:pool:{slug}:{sort}:{time ?? "-"}";
         if (_cache.TryGetValue(key, out IReadOnlyList<KickClip>? cached) && cached is not null)
             return cached;
 
-        var gate = _locks.GetOrAdd(slug, _ => new SemaphoreSlim(1, 1));
+        var gate = _locks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(ct);
         try
         {
             if (_cache.TryGetValue(key, out cached) && cached is not null)
                 return cached;
 
-            var pool = await _clips.GetChannelClipsAsync(slug, _opts.ClipsMaxPages, ct);
+            var pool = await _clips.GetChannelClipsAsync(slug, _opts.ClipsMaxPages, sort, time, ct);
             var ttl = TimeSpan.FromMinutes(Math.Max(1, _opts.ClipsCacheMinutes));
             _cache.Set(key, pool, ttl);
 
@@ -90,7 +107,7 @@ public class ClipsCatalogService
             foreach (var c in pool)
                 _cache.Set(VideoUrlKey(c.Id), c.VideoUrl, ttl + TimeSpan.FromMinutes(30));
 
-            _log.LogInformation("Loaded {Count} clips for {Slug}", pool.Count, slug);
+            _log.LogInformation("Loaded {Count} clips for {Slug} (sort={Sort} time={Time})", pool.Count, slug, sort, time ?? "-");
             return pool;
         }
         finally
@@ -98,6 +115,18 @@ public class ClipsCatalogService
             gate.Release();
         }
     }
+
+    /// <summary>Maps the sort mode to Kick's <c>sort</c> query value.</summary>
+    private static string SortParam(ClipsSortMode mode) => mode == ClipsSortMode.MostViewed ? "view" : "date";
+
+    /// <summary>Maps the time window to Kick's <c>time</c> query value.</summary>
+    private static string TimeParam(ClipsTimeWindow window) => window switch
+    {
+        ClipsTimeWindow.Day => "day",
+        ClipsTimeWindow.Week => "week",
+        ClipsTimeWindow.Month => "month",
+        _ => "all",
+    };
 
     /// <summary>Resolves a clip id to its upstream m3u8 URL (cache → single-clip refetch fallback). Null if unknown.</summary>
     public async Task<string?> ResolveClipVideoUrlAsync(string clipId, CancellationToken ct)

@@ -11,6 +11,7 @@
 @inject IServiceScopeFactory ScopeFactory
 @inject AuthenticationStateProvider AuthState
 @inject IJSRuntime JS
+@inject ClipsCatalogService Catalog
 
 <h1>Broadcasters</h1>
 <p class="muted">Each row is one Kick channel connected under one client app. Use "Connect" to begin a fresh OAuth flow for a channel.</p>
@@ -69,8 +70,10 @@
                             <button class="secondary" @onclick="() => CopyObsUrl(b.ChannelSlug)">Copy URL</button>
                             @if (CanManageClips(b))
                             {
+                                <button class="secondary" @onclick="() => OpenClipsEditor(b)">Settings</button>
                                 <button class="secondary" @onclick="() => ToggleClips(b.Id)">Hide</button>
                             }
+                            <br /><span class="muted">@ClipsSummary(b)</span>
                         }
                         else
                         {
@@ -92,6 +95,47 @@
                         }
                     </td>
                 </tr>
+                @if (_clipsEditId == b.Id)
+                {
+                    <tr>
+                        <td colspan="7" style="background:#0e1116;">
+                            <div style="display:flex;gap:1.2rem;align-items:center;flex-wrap:wrap;padding:0.4rem 0;">
+                                <strong>Clip player — @b.Username</strong>
+                                <label><span>Order</span>
+                                    <select @bind="_editSort">
+                                        <option value="@ClipsSortMode.Latest">Latest (newest first)</option>
+                                        <option value="@ClipsSortMode.MostViewed">Most viewed</option>
+                                    </select>
+                                </label>
+                                @if (_editSort == ClipsSortMode.MostViewed)
+                                {
+                                    <label><span>Time window</span>
+                                        <select @bind="_editWindow">
+                                            <option value="@ClipsTimeWindow.All">All time</option>
+                                            <option value="@ClipsTimeWindow.Day">Today</option>
+                                            <option value="@ClipsTimeWindow.Week">This week</option>
+                                            <option value="@ClipsTimeWindow.Month">This month</option>
+                                        </select>
+                                    </label>
+                                }
+                                <label><span>Shuffle</span> <input type="checkbox" @bind="_editShuffle" /></label>
+                                @if (_editShuffle)
+                                {
+                                    <label><span>Play first, in order</span>
+                                        <input type="number" min="0" max="20" style="width:5rem;" @bind="_editLeadIn" />
+                                    </label>
+                                }
+                                <button @onclick="() => SaveClipsSettings(b.Id)">Save</button>
+                                <button class="secondary" @onclick="CancelClipsEditor">Cancel</button>
+                            </div>
+                            <span class="muted">
+                                @(_editShuffle
+                                    ? $"Plays the top {_editLeadIn} {(_editSort == ClipsSortMode.MostViewed ? "most-viewed" : "newest")} clip(s) first, then random picks forever."
+                                    : $"Plays all clips in {(_editSort == ClipsSortMode.MostViewed ? "most-viewed" : "newest-first")} order, on loop.")
+                            </span>
+                        </td>
+                    </tr>
+                }
             }
             </tbody>
         </table>
@@ -164,6 +208,50 @@
     {
         try { await JS.InvokeVoidAsync("navigator.clipboard.writeText", ObsUrl(slug)); }
         catch { /* clipboard blocked (insecure context / denied) — Preview link still works */ }
+    }
+
+    // --- per-channel clip player settings editor ---
+    Guid? _clipsEditId;
+    ClipsSortMode _editSort;
+    ClipsTimeWindow _editWindow;
+    int _editLeadIn = 2;
+    bool _editShuffle = true;
+
+    string ClipsSummary(KickBroadcasterAccount b)
+    {
+        var order = b.ClipsSortMode == ClipsSortMode.MostViewed
+            ? "most viewed" + (b.ClipsTimeWindow == ClipsTimeWindow.All ? "" : $" ({b.ClipsTimeWindow.ToString().ToLowerInvariant()})")
+            : "latest";
+        return b.ClipsShuffle ? $"{order} · {b.ClipsLeadInCount} first, then shuffle" : $"{order} · in order";
+    }
+
+    void OpenClipsEditor(KickBroadcasterAccount b)
+    {
+        if (!CanManageClips(b)) return;
+        _clipsEditId = b.Id;
+        _editSort = b.ClipsSortMode;
+        _editWindow = b.ClipsTimeWindow;
+        _editLeadIn = b.ClipsLeadInCount;
+        _editShuffle = b.ClipsShuffle;
+    }
+
+    void CancelClipsEditor() => _clipsEditId = null;
+
+    async Task SaveClipsSettings(Guid id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var b = await db.Broadcasters.FindAsync(id);
+        if (b is null) return;
+        if (!CanManageClips(b)) return;        // server-side check; UI hides the button too
+        b.ClipsSortMode = _editSort;
+        b.ClipsTimeWindow = _editWindow;
+        b.ClipsLeadInCount = Math.Clamp(_editLeadIn, 0, 50);
+        b.ClipsShuffle = _editShuffle;
+        b.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        Catalog.InvalidateChannel(b.ChannelSlug);   // settings take effect immediately
+        _clipsEditId = null;
+        await Reload();
     }
 
     async Task ToggleClips(Guid id)

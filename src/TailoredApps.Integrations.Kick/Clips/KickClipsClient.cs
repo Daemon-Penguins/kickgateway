@@ -22,10 +22,12 @@ public class KickClipsClient : IKickClipsClient
         _log = log;
     }
 
-    public async Task<IReadOnlyList<KickClip>> GetChannelClipsAsync(string slug, int maxPages, CancellationToken ct = default)
+    public async Task<IReadOnlyList<KickClip>> GetChannelClipsAsync(string slug, int maxPages, string sort = "date", string? time = null, CancellationToken ct = default)
     {
         slug = (slug ?? "").Trim().ToLowerInvariant();
         if (slug.Length == 0) return Array.Empty<KickClip>();
+
+        var sortParam = string.IsNullOrWhiteSpace(sort) ? "date" : sort.Trim();
 
         var all = new List<KickClip>();
         var seenCursors = new HashSet<string>();
@@ -33,7 +35,9 @@ public class KickClipsClient : IKickClipsClient
 
         for (var page = 0; page < Math.Max(1, maxPages); page++)
         {
-            var url = $"{WebApiBase}/api/v2/channels/{Uri.EscapeDataString(slug)}/clips?sort=date";
+            var url = $"{WebApiBase}/api/v2/channels/{Uri.EscapeDataString(slug)}/clips?sort={Uri.EscapeDataString(sortParam)}";
+            if (!string.IsNullOrWhiteSpace(time))
+                url += "&time=" + Uri.EscapeDataString(time);
             if (!string.IsNullOrEmpty(cursor))
                 url += "&cursor=" + Uri.EscapeDataString(cursor);
 

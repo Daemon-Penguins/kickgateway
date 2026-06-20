@@ -104,11 +104,17 @@ Kick **clips** — drop it straight into OBS as a *Browser* source:
 https://${PUBLIC_HOST}/obs/clips/{slug}
 ```
 
-It plays the two newest clips first, then random picks forever. The admin
-**Broadcasters** page shows each channel's URL with **Copy URL** / **Preview**
-buttons and a **Show/Hide** toggle (`KickBroadcasterAccount.ClipsDisplayEnabled`).
-Optional query params: `?muted=1`, `?overlay=1` (title/creator lower-third),
-`?refresh=N` (minutes between background list refreshes).
+Each channel's playback is configured in the admin **Broadcasters** page
+(**Settings**): the **order** (`latest` or `most viewed`, with a time window —
+day / week / month / all — for most-viewed), whether to **shuffle**, and how many
+top clips to **play first** before shuffling. The same row has the URL
+(**Copy URL** / **Preview**) and a **Show/Hide** toggle
+(`KickBroadcasterAccount.ClipsDisplayEnabled`). Defaults match the original
+behaviour: two newest first, then random forever.
+
+Optional player query params (display only — order is admin-controlled): `?muted=1`,
+`?overlay=1` (title/creator lower-third), `?refresh=N` (minutes between background
+list refreshes).
 
 ### Why a sidecar (Cloudflare)
 

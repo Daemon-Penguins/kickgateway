@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using TailoredApps.KickGateway.Api.Data;
 using TailoredApps.KickGateway.Api.Services;
 
 namespace TailoredApps.KickGateway.Api.Endpoints;
@@ -45,7 +46,7 @@ public static class ObsClipsEndpoints
             if (channel is null)
                 return Results.NotFound(new { error = "unknown or disabled channel" });
 
-            var pool = await catalog.GetPoolAsync(channel.Slug, ct);
+            var pool = await catalog.GetPoolAsync(channel.Slug, channel.SortMode, channel.TimeWindow, ct);
             var clips = pool.Select(c => new ObsClipDto(
                 c.Id,
                 c.Title,
@@ -57,7 +58,13 @@ public static class ObsClipsEndpoints
                 c.CreatorUsername,
                 c.CategoryName)).ToList();
 
-            return Results.Ok(new ObsPlaylistDto(new ObsChannelDto(channel.Slug, channel.Username), clips.Count, clips));
+            var settings = new ObsSettingsDto(
+                channel.SortMode == ClipsSortMode.MostViewed ? "most_viewed" : "latest",
+                channel.TimeWindow.ToString().ToLowerInvariant(),
+                Math.Max(0, channel.LeadInCount),
+                channel.Shuffle);
+
+            return Results.Ok(new ObsPlaylistDto(new ObsChannelDto(channel.Slug, channel.Username), settings, clips.Count, clips));
         }).AllowAnonymous();
 
         // 3) Rewritten HLS manifest — segment URIs point back at our proxy (4).
@@ -134,6 +141,8 @@ public static class ObsClipsEndpoints
 
     private record ObsChannelDto(string Slug, string Username);
 
+    private record ObsSettingsDto(string Sort, string TimeWindow, int LeadIn, bool Shuffle);
+
     private record ObsClipDto(
         string Id,
         string Title,
@@ -145,5 +154,5 @@ public static class ObsClipsEndpoints
         string? Creator,
         string? Category);
 
-    private record ObsPlaylistDto(ObsChannelDto Channel, int Count, IReadOnlyList<ObsClipDto> Clips);
+    private record ObsPlaylistDto(ObsChannelDto Channel, ObsSettingsDto Settings, int Count, IReadOnlyList<ObsClipDto> Clips);
 }

@@ -61,6 +61,19 @@ public class KickClipsClientTests
         Assert.Empty(handler.Requests); // never calls out when there's no sidecar
     }
 
+    [Fact]
+    public async Task GetChannelClips_passes_sort_and_time_to_kick()
+    {
+        var handler = new StubHandler(_ => (HttpStatusCode.OK, Page("", ("clip_A", false))));
+        var client = new KickClipsClient(new StubFactory(handler), Opts(), NullLogger<KickClipsClient>.Instance);
+
+        await client.GetChannelClipsAsync("xqc", maxPages: 1, sort: "view", time: "month");
+
+        var url = DecodedKickUrl(handler.Requests[0]);
+        Assert.Contains("sort=view", url);
+        Assert.Contains("time=month", url);
+    }
+
     // --- helpers ---
 
     private static IOptions<KickGlobalDefaults> Opts() => Options.Create(new KickGlobalDefaults

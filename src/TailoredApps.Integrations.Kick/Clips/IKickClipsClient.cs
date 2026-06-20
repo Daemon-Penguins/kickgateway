@@ -11,11 +11,13 @@ namespace TailoredApps.Integrations.Kick.Clips;
 public interface IKickClipsClient
 {
     /// <summary>
-    /// Newest-first clips for a channel slug, paginated up to <paramref name="maxPages"/>
-    /// pages. Returns an empty list (never throws) when the channel has no clips or the
-    /// fetch fails — callers treat that as "nothing to show".
+    /// Clips for a channel slug, paginated up to <paramref name="maxPages"/> pages.
+    /// <paramref name="sort"/> is the Kick sort key (<c>date</c> = newest first,
+    /// <c>view</c> = most viewed); <paramref name="time"/> is the Kick time window for
+    /// <c>view</c> (<c>all</c>/<c>day</c>/<c>week</c>/<c>month</c>, null for date).
+    /// Returns an empty list (never throws) on no clips / fetch failure.
     /// </summary>
-    Task<IReadOnlyList<KickClip>> GetChannelClipsAsync(string slug, int maxPages, CancellationToken ct = default);
+    Task<IReadOnlyList<KickClip>> GetChannelClipsAsync(string slug, int maxPages, string sort = "date", string? time = null, CancellationToken ct = default);
 
     /// <summary>
     /// A single clip by id — used to recover a fresh <c>video_url</c> if the cached pool

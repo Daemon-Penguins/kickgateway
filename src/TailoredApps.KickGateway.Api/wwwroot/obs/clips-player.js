@@ -6,10 +6,14 @@
  * Blazor circuit) so it survives running for hours/days in OBS.
  *
  * URL: /obs/clips/{slug}   (slug read from the path)
- * Params:
+ * Params (display only — clip ORDER is set per-channel in the admin UI):
  *   ?muted=1     start muted (default: audio on — OBS allows autoplay with sound)
  *   ?overlay=1   show a title/creator lower-third at the start of each clip
  *   ?refresh=N   minutes between background clip-list refreshes (default 10)
+ *
+ * Order/shuffle/lead-in come from the API (settings: { leadIn, shuffle }), driven
+ * by the channel's admin settings. The server already sorts the pool (latest or
+ * most-viewed); this script applies the lead-in + shuffle.
  */
 (function () {
     "use strict";
@@ -26,10 +30,12 @@
     var slug = (params.get("channel") || lastPathSegment() || "").trim().toLowerCase();
 
     // --- playback state ---
-    var pool = [];                 // newest-first clips from the API
+    var settings = { leadIn: 2, shuffle: true }; // overwritten from the API
+    var pool = [];                 // clips from the API, in the channel's chosen order
     var knownIds = new Set();      // every clip id we've seen (refresh diffing)
-    var priority = [];             // clips to play next (latest two, then freshly-found)
+    var priority = [];             // clips to play next (lead-in, then freshly-found)
     var bag = [];                  // shuffled index queue for the random phase
+    var seqIndex = 0;              // cursor for ordered (non-shuffle) playback
     var lastPlayedId = null;
     var fails = 0;
     var hls = null;
@@ -53,6 +59,13 @@
         if (priority.length) return priority.shift();
         if (!pool.length) return null;
 
+        // Ordered mode: walk the pool top-to-bottom in the server's sort order, then loop.
+        if (!settings.shuffle) {
+            if (seqIndex >= pool.length) seqIndex = 0;
+            return pool[seqIndex++];
+        }
+
+        // Shuffle mode: draw from a reshuffled bag of the whole pool.
         if (!bag.length) {
             bag = shuffle(pool.map(function (_, i) { return i; }));
         }
@@ -72,16 +85,21 @@
         if (isFirst) {
             pool = newPool;
             pool.forEach(function (c) { knownIds.add(c.id); });
-            priority = pool.slice(0, Math.min(2, pool.length)); // the two latest
+            // In shuffle mode, play the top N (lead-in) first, in order; in ordered
+            // mode the pool is already in the chosen order, so just walk it.
+            var leadIn = Math.max(0, settings.leadIn | 0);
+            priority = settings.shuffle ? pool.slice(0, Math.min(leadIn, pool.length)) : [];
             bag = [];
+            seqIndex = 0;
             return;
         }
 
-        // Refresh: surface brand-new clips next (newest first, capped).
+        // Refresh: surface brand-new clips next (top-of-list first, capped).
         var fresh = newPool.filter(function (c) { return !knownIds.has(c.id); });
         fresh.forEach(function (c) { knownIds.add(c.id); });
         pool = newPool;
         bag = [];
+        if (seqIndex > pool.length) seqIndex = 0;
         if (fresh.length) priority = fresh.slice(0, 5).concat(priority);
     }
 
@@ -92,6 +110,10 @@
                 return r.json();
             })
             .then(function (data) {
+                if (data && data.settings) {
+                    if (typeof data.settings.leadIn === "number") settings.leadIn = data.settings.leadIn;
+                    if (typeof data.settings.shuffle === "boolean") settings.shuffle = data.settings.shuffle;
+                }
                 applyPool(data.clips, isFirst);
                 if (isFirst) {
                     if (pool.length || priority.length) playNext();

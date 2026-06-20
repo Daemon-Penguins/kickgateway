@@ -45,6 +45,24 @@ public class KickClientApp
     public List<KickBroadcasterAccount> Accounts { get; set; } = new();
 }
 
+/// <summary>How the OBS clip player orders a channel's clip pool.</summary>
+public enum ClipsSortMode
+{
+    /// <summary>Newest first (Kick <c>sort=date</c>).</summary>
+    Latest = 0,
+    /// <summary>Most viewed first (Kick <c>sort=view</c>), within <see cref="ClipsTimeWindow"/>.</summary>
+    MostViewed = 1,
+}
+
+/// <summary>Time window for <see cref="ClipsSortMode.MostViewed"/> (Kick <c>time=</c> param).</summary>
+public enum ClipsTimeWindow
+{
+    All = 0,
+    Day = 1,
+    Week = 2,
+    Month = 3,
+}
+
 /// <summary>
 /// One broadcaster authenticated under a specific client app. A single Kick
 /// channel can appear multiple times if connected under different clients.
@@ -87,6 +105,20 @@ public class KickBroadcasterAccount
     /// disabling its webhooks.
     /// </summary>
     public bool ClipsDisplayEnabled { get; set; } = true;
+
+    // === OBS clip player settings (per channel) ===
+
+    /// <summary>Base ordering of the clip pool: newest first, or most viewed.</summary>
+    public ClipsSortMode ClipsSortMode { get; set; } = ClipsSortMode.Latest;
+
+    /// <summary>Time window for "most viewed" (ignored for Latest).</summary>
+    public ClipsTimeWindow ClipsTimeWindow { get; set; } = ClipsTimeWindow.All;
+
+    /// <summary>How many clips from the top of the sorted pool to play first, in order, before shuffling. Only applies when <see cref="ClipsShuffle"/> is true.</summary>
+    public int ClipsLeadInCount { get; set; } = 2;
+
+    /// <summary>True = play the lead-in clips, then random picks forever. False = play the whole pool in sorted order and loop.</summary>
+    public bool ClipsShuffle { get; set; } = true;
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
