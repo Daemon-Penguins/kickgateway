@@ -1,4 +1,5 @@
 using MassTransit;
+using TailoredApps.KickGateway.Contracts.Channels;
 using TailoredApps.KickGateway.Contracts.Events;
 
 namespace TailoredApps.KickGateway.Contracts;
@@ -37,6 +38,10 @@ public static class KickEventTopology
         ConfigureMessageType<KicksGifted>(cfg, m => m.BroadcasterSlug);
         ConfigureMessageType<ChannelRewardRedemptionUpdated>(cfg, m => m.BroadcasterSlug);
         ConfigureMessageType<KickEventUnknown>(cfg, m => m.BroadcasterSlug);
+
+        // On-demand channel statistics (request → response), routed by slug too.
+        ConfigureMessageType<ChannelStatsRequested>(cfg, m => m.BroadcasterSlug);
+        ConfigureMessageType<ChannelStats>(cfg, m => m.BroadcasterSlug);
     }
 
     /// <summary>

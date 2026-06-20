@@ -238,6 +238,14 @@ public class MyChatConsumer : IConsumer<ChatMessageSent>
 }
 ```
 
+### On-demand channel stats
+
+Subscribers can also ask the gateway for a channel's **live stats** (viewer
+count, live state, followers, category, …) by publishing `ChannelStatsRequested`
+and consuming `ChannelStats` — or via `IRequestClient` for inline request/
+response. The gateway fetches them from the Cloudflare-protected website API
+through the clips-fetcher sidecar. See `docs/CLIENT-INTEGRATION.md`.
+
 ## Notes
 
 - Kick's `events[].version` MUST be a JSON number on subscription create.

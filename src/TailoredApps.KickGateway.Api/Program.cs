@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using TailoredApps.Integrations.Kick;
 using TailoredApps.KickGateway.Api.Auth;
+using TailoredApps.KickGateway.Api.Channels;
 using TailoredApps.KickGateway.Api.Components;
 using TailoredApps.KickGateway.Api.Data;
 using TailoredApps.KickGateway.Api.Endpoints;
@@ -11,6 +12,7 @@ using TailoredApps.KickGateway.Api.LiveFeed;
 using TailoredApps.KickGateway.Api.Services;
 using TailoredApps.KickGateway.Api.Webhooks;
 using TailoredApps.KickGateway.Contracts;
+using TailoredApps.KickGateway.Contracts.Channels;
 using TailoredApps.KickGateway.Contracts.Events;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -87,6 +89,7 @@ builder.Services.AddMassTransit(x =>
 
     x.SetKebabCaseEndpointNameFormatter();
     x.AddConsumer<LiveFeedConsumer>();
+    x.AddConsumer<ChannelStatsConsumer>();
 
     x.UsingRabbitMq((ctx, cfg) =>
     {
@@ -127,6 +130,16 @@ builder.Services.AddMassTransit(x =>
             KickEventTopology.BindKickEvent<KickEventUnknown>(e);
 
             e.ConfigureConsumer<LiveFeedConsumer>(ctx);
+        });
+
+        // On-demand channel statistics. A SHARED durable queue (competing consumers
+        // across API replicas, so each request is handled once) bound to
+        // ChannelStatsRequested for every slug. The consumer fetches via the sidecar
+        // and publishes ChannelStats (and responds, if invoked as a request).
+        cfg.ReceiveEndpoint("kickgateway-channel-stats", e =>
+        {
+            KickEventTopology.BindKickEvent<ChannelStatsRequested>(e);
+            e.ConfigureConsumer<ChannelStatsConsumer>(ctx);
         });
 
         // No ConfigureEndpoints — we've declared the only consumer explicitly,

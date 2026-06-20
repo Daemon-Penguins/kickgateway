@@ -1,7 +1,9 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using TailoredApps.Integrations.Kick.Channels;
 using TailoredApps.Integrations.Kick.Clips;
+using TailoredApps.Integrations.Kick.Sidecar;
 
 namespace TailoredApps.Integrations.Kick;
 
@@ -38,13 +40,16 @@ public static class ServiceCollectionExtensions
             http.BaseAddress = new Uri(opts.ApiBaseUrl);
         });
 
-        // Clips fetcher talks to the sidecar at an absolute URL built from config,
-        // so this named client needs no base address.
-        services.AddHttpClient(KickClipsClient.HttpClientName);
+        // The sidecar fetcher talks to the clips-fetcher at an absolute URL built from
+        // config, so this named client needs no base address. Shared by the clips +
+        // channel-stats clients.
+        services.AddHttpClient(KickSidecarFetcher.HttpClientName);
 
         services.AddSingleton<IKickClient, KickClient>();
         services.AddSingleton<IKickSignatureVerifier, KickSignatureVerifier>();
+        services.AddSingleton<IKickSidecarFetcher, KickSidecarFetcher>();
         services.AddSingleton<IKickClipsClient, KickClipsClient>();
+        services.AddSingleton<IKickChannelClient, KickChannelClient>();
         return services;
     }
 }

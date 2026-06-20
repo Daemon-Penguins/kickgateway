@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using TailoredApps.Integrations.Kick;
 using TailoredApps.Integrations.Kick.Clips;
+using TailoredApps.Integrations.Kick.Sidecar;
 using Xunit;
 
 namespace TailoredApps.KickGateway.Tests;
@@ -24,7 +25,7 @@ public class KickClipsClientTests
                 : (HttpStatusCode.OK, Page("CUR1", ("clip_A", false), ("clip_B", false), ("clip_M", true)));
         });
 
-        var client = new KickClipsClient(new StubFactory(handler), Opts(), NullLogger<KickClipsClient>.Instance);
+        var client = Client(handler, Opts());
 
         var clips = await client.GetChannelClipsAsync("XQC", maxPages: 3);
 
@@ -53,7 +54,7 @@ public class KickClipsClientTests
     {
         var handler = new StubHandler(_ => (HttpStatusCode.OK, Page("", ("clip_A", false))));
         var opts = Options.Create(new KickGlobalDefaults { ClipsFetcherUrl = "" }); // not configured
-        var client = new KickClipsClient(new StubFactory(handler), opts, NullLogger<KickClipsClient>.Instance);
+        var client = Client(handler, opts);
 
         var clips = await client.GetChannelClipsAsync("xqc", 3);
 
@@ -65,7 +66,7 @@ public class KickClipsClientTests
     public async Task GetChannelClips_passes_sort_and_time_to_kick()
     {
         var handler = new StubHandler(_ => (HttpStatusCode.OK, Page("", ("clip_A", false))));
-        var client = new KickClipsClient(new StubFactory(handler), Opts(), NullLogger<KickClipsClient>.Instance);
+        var client = Client(handler, Opts());
 
         await client.GetChannelClipsAsync("xqc", maxPages: 1, sort: "view", time: "month");
 
@@ -75,6 +76,10 @@ public class KickClipsClientTests
     }
 
     // --- helpers ---
+
+    private static KickClipsClient Client(StubHandler handler, IOptions<KickGlobalDefaults> opts) =>
+        new(new KickSidecarFetcher(new StubFactory(handler), opts, NullLogger<KickSidecarFetcher>.Instance),
+            opts, NullLogger<KickClipsClient>.Instance);
 
     private static IOptions<KickGlobalDefaults> Opts() => Options.Create(new KickGlobalDefaults
     {

@@ -3,21 +3,19 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using TailoredApps.Integrations.Kick.Internal;
 using TailoredApps.Integrations.Kick.Models;
+using TailoredApps.Integrations.Kick.Sidecar;
 
 namespace TailoredApps.Integrations.Kick.Clips;
 
 public class KickClipsClient : IKickClipsClient
 {
-    /// <summary>Named HttpClient that talks to the clips-fetcher sidecar.</summary>
-    public const string HttpClientName = "KickClipsFetcher";
-
-    private readonly IHttpClientFactory _factory;
+    private readonly IKickSidecarFetcher _fetcher;
     private readonly KickGlobalDefaults _defaults;
     private readonly ILogger<KickClipsClient> _log;
 
-    public KickClipsClient(IHttpClientFactory factory, IOptions<KickGlobalDefaults> defaults, ILogger<KickClipsClient> log)
+    public KickClipsClient(IKickSidecarFetcher fetcher, IOptions<KickGlobalDefaults> defaults, ILogger<KickClipsClient> log)
     {
-        _factory = factory;
+        _fetcher = fetcher;
         _defaults = defaults.Value;
         _log = log;
     }
@@ -41,7 +39,7 @@ public class KickClipsClient : IKickClipsClient
             if (!string.IsNullOrEmpty(cursor))
                 url += "&cursor=" + Uri.EscapeDataString(cursor);
 
-            var json = await FetchAsync(url, ct);
+            var json = await _fetcher.FetchAsync(url, ct);
             if (json is null) break;
 
             string? next;
@@ -78,7 +76,7 @@ public class KickClipsClient : IKickClipsClient
         clipId = (clipId ?? "").Trim();
         if (clipId.Length == 0) return null;
 
-        var json = await FetchAsync($"{WebApiBase}/api/v2/clips/{Uri.EscapeDataString(clipId)}", ct);
+        var json = await _fetcher.FetchAsync($"{WebApiBase}/api/v2/clips/{Uri.EscapeDataString(clipId)}", ct);
         if (json is null) return null;
 
         try
@@ -100,40 +98,6 @@ public class KickClipsClient : IKickClipsClient
     private string WebApiBase => string.IsNullOrWhiteSpace(_defaults.ClipsWebApiBaseUrl)
         ? "https://kick.com"
         : _defaults.ClipsWebApiBaseUrl.TrimEnd('/');
-
-    /// <summary>GETs a Kick URL via the sidecar and returns the body, or null on any failure.</summary>
-    private async Task<string?> FetchAsync(string kickUrl, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(_defaults.ClipsFetcherUrl))
-        {
-            _log.LogError("Kick clips fetcher not configured (Kick:ClipsFetcherUrl is empty) — cannot read clips");
-            return null;
-        }
-
-        var fetchUrl = $"{_defaults.ClipsFetcherUrl.TrimEnd('/')}/fetch?url={Uri.EscapeDataString(kickUrl)}";
-        using var req = new HttpRequestMessage(HttpMethod.Get, fetchUrl);
-        if (!string.IsNullOrEmpty(_defaults.ClipsFetcherSecret))
-            req.Headers.TryAddWithoutValidation("X-Fetch-Secret", _defaults.ClipsFetcherSecret);
-
-        try
-        {
-            var http = _factory.CreateClient(HttpClientName);
-            using var resp = await http.SendAsync(req, ct);
-            var body = await resp.Content.ReadAsStringAsync(ct);
-            if (!resp.IsSuccessStatusCode)
-            {
-                _log.LogWarning("Clips fetch failed ({Status}) for {Url}: {Body}",
-                    (int)resp.StatusCode, kickUrl, Truncate(body, 300));
-                return null;
-            }
-            return body;
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Clips fetch threw for {Url}", kickUrl);
-            return null;
-        }
-    }
 
     private IReadOnlyList<KickClip> ApplyFilters(List<KickClip> clips)
     {
@@ -181,6 +145,4 @@ public class KickClipsClient : IKickClipsClient
     }
 
     private static string? NullIfEmpty(string s) => string.IsNullOrWhiteSpace(s) ? null : s;
-
-    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "…";
 }

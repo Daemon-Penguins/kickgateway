@@ -61,6 +61,11 @@ Status: actively developed.
   scoped to managed, enabled broadcasters. Clip video (HLS on `clips.kick.com`)
   is proxied **same-origin** (`/api/obs/hls/...`, forwarding HTTP Range) because
   the CDN sends no CORS header.
+- **Channel stats use the same sidecar.** `IKickChannelClient` reads
+  `kick.com/api/v2/channels/{slug}` (viewer count, live state, …) via the shared
+  `IKickSidecarFetcher`. The `ChannelStatsConsumer` turns a `ChannelStatsRequested`
+  message into a published `ChannelStats` (request/response also supported) — both
+  contracts live in `TailoredApps.KickGateway.Contracts.Channels`.
 
 ## Testing
 

@@ -27,6 +27,17 @@ internal static class JsonExtensions
         };
     }
 
+    public static long ReadAsLong(this JsonElement parent, string prop, long fallback = 0)
+    {
+        if (!parent.TryGetProperty(prop, out var el)) return fallback;
+        return el.ValueKind switch
+        {
+            JsonValueKind.Number => el.TryGetInt64(out var i) ? i : (el.TryGetDouble(out var d) ? (long)d : fallback),
+            JsonValueKind.String => long.TryParse(el.GetString(), out var s) ? s : fallback,
+            _ => fallback
+        };
+    }
+
     public static bool ReadAsBool(this JsonElement parent, string prop, bool fallback = false)
     {
         if (!parent.TryGetProperty(prop, out var el)) return fallback;

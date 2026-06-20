@@ -65,6 +65,53 @@ want one consumer class to handle "all events" (see the
 
 ---
 
+## Requesting channel statistics (on demand)
+
+Beyond the webhook-driven events above, the gateway can fetch a channel's **live
+statistics** (viewer count, live state, followers, category, …) on demand. These
+aren't in Kick's official API, so the gateway reads them from the Cloudflare-
+protected website API via its sidecar — you just exchange two messages (in
+`TailoredApps.KickGateway.Contracts.Channels`):
+
+| Contract | Direction | Purpose |
+|----------|-----------|---------|
+| `ChannelStatsRequested` | you → gateway | ask for a channel's stats (by slug) |
+| `ChannelStats` | gateway → you | the snapshot (viewers, live, followers, raw JSON, …) |
+
+`ChannelStats` always comes back — even on failure (`Success = false`, `Error`
+set) — so request/response callers never hang. `RawPayload` carries the full
+upstream JSON for anything not surfaced as a typed field.
+
+**Option A — publish / subscribe** (routed by slug like every other contract):
+
+```csharp
+KickEventTopology.ConfigurePublishTopology(cfg);
+cfg.ReceiveEndpoint("myapp-stats", e =>
+{
+    KickEventTopology.BindKickEvent<ChannelStats>(e, channels);   // filter by slug
+    e.ConfigureConsumer<MyStatsConsumer>(ctx);
+});
+// ...then, whenever you want a refresh:
+await publishEndpoint.Publish(new ChannelStatsRequested { BroadcasterSlug = "xqc" });
+```
+
+**Option B — request / response** (the gateway also responds):
+
+```csharp
+var client = bus.CreateRequestClient<ChannelStatsRequested>();
+var response = await client.GetResponse<ChannelStats>(
+    new ChannelStatsRequested { BroadcasterSlug = "xqc" });
+
+var s = response.Message;
+Console.WriteLine($"{s.BroadcasterSlug}: live={s.IsLive} viewers={s.ViewerCount}");
+```
+
+> The fetch is on-demand and uncached — request at whatever cadence you need
+> (e.g. poll every 30–60 s for a viewer-count overlay), but be reasonable: each
+> request is a live hit on Kick through the sidecar.
+
+---
+
 ## Step 1 — Get the contracts assembly
 
 You have two options. Both produce the same CLR types, which is all that
