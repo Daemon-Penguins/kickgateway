@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kick Clips</title>
+    <style>
+        html, body { margin: 0; height: 100%; background: #000; overflow: hidden;
+            font-family: system-ui, "Segoe UI", Roboto, sans-serif; }
+        #stage { position: fixed; inset: 0; background: #000; }
+        video { width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
+
+        #overlay { position: fixed; left: 0; right: 0; bottom: 0; padding: 28px 40px; color: #fff;
+            background: linear-gradient(to top, rgba(0,0,0,.78), rgba(0,0,0,0));
+            text-shadow: 0 2px 6px rgba(0,0,0,.85);
+            opacity: 0; transition: opacity .4s ease; pointer-events: none; }
+        #overlay.show { opacity: 1; }
+        #overlay .title { font-weight: 700; font-size: 30px; line-height: 1.2; }
+        #overlay .meta { font-size: 19px; opacity: .85; margin-top: 6px; }
+
+        #msg { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+            color: #8b93a7; font-size: 22px; text-align: center; padding: 40px; }
+        #msg.hidden { display: none; }
+        .kick { color: #53fc18; }
+    </style>
+</head>
+<body>
+    <div id="stage">
+        <video id="video" playsinline></video>
+        <div id="overlay"><div class="title"></div><div class="meta"></div></div>
+        <div id="msg">Loading <span class="kick">clips</span>…</div>
+    </div>
+
+    <!-- Absolute paths: this page is served at /obs/clips/{slug} -->
+    <script src="/obs/hls.min.js"></script>
+    <script src="/obs/clips-player.js"></script>
+</body>
+</html>

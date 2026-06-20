@@ -46,6 +46,8 @@ public class KickGatewayDbContext : DbContext
                 .HasForeignKey(x => x.KickClientAppId)
                 .OnDelete(DeleteBehavior.Cascade);
             b.HasIndex(x => new { x.KickClientAppId, x.KickUserId }).IsUnique();
+            // Existing broadcasters opt into the public OBS clips page by default.
+            b.Property(x => x.ClipsDisplayEnabled).HasDefaultValue(true);
         });
 
         modelBuilder.Entity<KickEventSubscription>(b =>

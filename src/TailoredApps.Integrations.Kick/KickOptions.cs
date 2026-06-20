@@ -37,4 +37,29 @@ public class KickGlobalDefaults
     public string WebhookUrl { get; set; } = "";
     public int PublicKeyCacheMinutes { get; set; } = 60;
     public string DefaultScopes { get; set; } = "events:subscribe channel:read channel:write user:read chat:write streamkey:read moderation:ban";
+
+    // === Clips (OBS player) ===
+    // Clips live only on Kick's Cloudflare-protected website host and are read via
+    // the browser-TLS "clips-fetcher" sidecar — see IKickClipsClient.
+
+    /// <summary>Host that serves the clips web API. Default is the public website.</summary>
+    public string ClipsWebApiBaseUrl { get; set; } = "https://kick.com";
+
+    /// <summary>Base URL of the clips-fetcher sidecar (e.g. http://clips-fetcher:8080). Empty disables clips.</summary>
+    public string ClipsFetcherUrl { get; set; } = "";
+
+    /// <summary>Shared secret sent to the sidecar as the X-Fetch-Secret header.</summary>
+    public string ClipsFetcherSecret { get; set; } = "";
+
+    /// <summary>How many clip pages (~20 each) to pull for the random pool.</summary>
+    public int ClipsMaxPages { get; set; } = 3;
+
+    /// <summary>How long to cache a channel's clip pool before re-fetching.</summary>
+    public int ClipsCacheMinutes { get; set; } = 10;
+
+    /// <summary>Drop clips flagged mature (default true — OBS sources usually run on-stream).</summary>
+    public bool ClipsExcludeMature { get; set; } = true;
+
+    /// <summary>Drop clips shorter than this many seconds (0 = no minimum).</summary>
+    public int ClipsMinDurationSeconds { get; set; } = 0;
 }

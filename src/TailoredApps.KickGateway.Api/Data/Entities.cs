@@ -80,6 +80,14 @@ public class KickBroadcasterAccount
 
     public bool IsEnabled { get; set; } = true;
 
+    /// <summary>
+    /// When true, this channel's clips are served on the public OBS player page at
+    /// <c>/obs/clips/{slug}</c>. Independent of <see cref="IsEnabled"/> (which gates
+    /// event ingestion) so a channel can be opted out of the public page without
+    /// disabling its webhooks.
+    /// </summary>
+    public bool ClipsDisplayEnabled { get; set; } = true;
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

@@ -28,7 +28,7 @@ Status: actively developed.
 
 ### Infrastructure
 - **Docker** + Traefik (TLS) on prod
-- Dev: Aspire-managed containers (SQL Server + RabbitMQ)
+- Dev: Aspire-managed containers (SQL Server + RabbitMQ + clips-fetcher)
 - Fallback dev: `docker/docker-compose.yml`
 
 ### Language conventions
@@ -50,6 +50,17 @@ Status: actively developed.
 - **No business commands in this codebase.** It is a thin dispatcher;
   consumers live in the subscriber apps (this repo's samples + any client
   apps that reference the Contracts package).
+- **Clips go through a Cloudflare-bypass sidecar.** Kick clips are NOT in the
+  official `public/v1` API — only on the website host
+  (`kick.com/api/v2/channels/{slug}/clips`), which Cloudflare blocks by TLS
+  fingerprint (a .NET `HttpClient` gets 403). The `clips-fetcher` sidecar
+  (`docker/clips-fetcher`, Python + `curl_cffi`) fetches the listing with a
+  browser fingerprint; all Kick URL/JSON logic stays in .NET
+  (`IKickClipsClient`). Do NOT send the broadcaster OAuth token for clips — the
+  endpoint is unauthenticated; the public `/obs/clips/{slug}` page is instead
+  scoped to managed, enabled broadcasters. Clip video (HLS on `clips.kick.com`)
+  is proxied **same-origin** (`/api/obs/hls/...`, forwarding HTTP Range) because
+  the CDN sends no CORS header.
 
 ## Testing
 
@@ -58,6 +69,8 @@ Status: actively developed.
   dev DB), never an in-memory provider.
 - MassTransit `ITestHarness` for verifying publish flow without standing up
   RabbitMQ.
+- Unit tests live in `tests/TailoredApps.KickGateway.Tests` (e.g. clip JSON
+  parsing, HLS manifest rewrite). Run with `dotnet test`.
 
 ## Solution layout
 
@@ -74,6 +87,8 @@ TailoredApps.KickGateway.slnx
 │   ├── TailoredApps.KickGateway.AppHost/           # Aspire orchestrator (F5 entrypoint)
 │   └── TailoredApps.KickGateway.ServiceDefaults/   # OTel/health/resilience shared
 ├── docker/docker-compose.yml                       # fallback dev infra without Aspire
+├── docker/clips-fetcher/                           # browser-TLS fetch proxy (clips past Cloudflare)
+├── tests/TailoredApps.KickGateway.Tests/           # xUnit unit tests
 └── docs/CLIENT-INTEGRATION.md                      # how external clients subscribe
 ```
 

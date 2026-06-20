@@ -1,0 +1,4 @@
+# Browser-TLS impersonation client. Ships manylinux wheels (no compiler needed).
+# Pinned to a range so a fresh image build stays reproducible-ish but can pick up
+# patch fixes / newer Chrome fingerprints.
+curl_cffi>=0.7,<1.0

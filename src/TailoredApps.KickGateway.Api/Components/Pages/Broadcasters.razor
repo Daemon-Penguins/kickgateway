@@ -3,12 +3,14 @@
 @using System.Security.Claims
 @using System.Text.Json
 @using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.JSInterop
 @using TailoredApps.KickGateway.Api.Auth
 @using TailoredApps.KickGateway.Api.Services
 @inject IDbContextFactory<KickGatewayDbContext> DbFactory
 @inject NavigationManager Nav
 @inject IServiceScopeFactory ScopeFactory
 @inject AuthenticationStateProvider AuthState
+@inject IJSRuntime JS
 
 <h1>Broadcasters</h1>
 <p class="muted">Each row is one Kick channel connected under one client app. Use "Connect" to begin a fresh OAuth flow for a channel.</p>
@@ -49,7 +51,7 @@
         <div class="table-scroll">
         <table>
             <thead>
-                <tr><th>Channel</th><th>Client app</th><th>Subscriptions</th><th>Token expires</th><th>Status</th><th></th></tr>
+                <tr><th>Channel</th><th>Client app</th><th>Subscriptions</th><th>Token expires</th><th>Status</th><th>OBS clips</th><th></th></tr>
             </thead>
             <tbody>
             @foreach (var b in _rows)
@@ -60,6 +62,25 @@
                     <td>@b.Subscriptions.Count</td>
                     <td><span class="muted">@b.AccessTokenExpiresAt.ToString("u")</span></td>
                     <td>@(b.IsEnabled ? new MarkupString("<span class='pill green'>enabled</span>") : new MarkupString("<span class='pill red'>disabled</span>"))</td>
+                    <td>
+                        @if (b.ClipsDisplayEnabled)
+                        {
+                            <a href="@ObsUrl(b.ChannelSlug)" target="_blank" rel="noopener">Preview</a>
+                            <button class="secondary" @onclick="() => CopyObsUrl(b.ChannelSlug)">Copy URL</button>
+                            @if (CanManageClips(b))
+                            {
+                                <button class="secondary" @onclick="() => ToggleClips(b.Id)">Hide</button>
+                            }
+                        }
+                        else
+                        {
+                            <span class="muted">hidden</span>
+                            @if (CanManageClips(b))
+                            {
+                                <button class="secondary" @onclick="() => ToggleClips(b.Id)">Show</button>
+                            }
+                        }
+                    </td>
                     <td>
                         @if (CanEnroll(b))
                         {
@@ -132,6 +153,30 @@
 
     bool CanToggle(KickBroadcasterAccount b) =>
         _user.HasClientRoleAtLeast(b.KickClientAppId, AdminRole.ClientAdmin);
+
+    bool CanManageClips(KickBroadcasterAccount b) =>
+        _user.HasClientRoleAtLeast(b.KickClientAppId, AdminRole.ClientOperator);
+
+    // Public OBS browser-source URL for this channel's clip reel.
+    string ObsUrl(string slug) => $"{Nav.BaseUri.TrimEnd('/')}/obs/clips/{Uri.EscapeDataString(slug)}";
+
+    async Task CopyObsUrl(string slug)
+    {
+        try { await JS.InvokeVoidAsync("navigator.clipboard.writeText", ObsUrl(slug)); }
+        catch { /* clipboard blocked (insecure context / denied) — Preview link still works */ }
+    }
+
+    async Task ToggleClips(Guid id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var b = await db.Broadcasters.FindAsync(id);
+        if (b is null) return;
+        if (!CanManageClips(b)) return;        // server-side check; UI hides the button too
+        b.ClipsDisplayEnabled = !b.ClipsDisplayEnabled;
+        b.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        await Reload();
+    }
 
     void StartConnect()
     {

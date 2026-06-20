@@ -22,6 +22,7 @@ src/
   TailoredApps.KickGateway.AppHost/           # .NET Aspire orchestrator (F5 from VS).
   TailoredApps.KickGateway.ServiceDefaults/   # OTel + health + resilience.
 docker/docker-compose.yml                     # RabbitMQ + SQL Server (dev fallback).
+docker/clips-fetcher/                         # Browser-TLS fetch proxy (reads clips past Cloudflare).
 docs/CLIENT-INTEGRATION.md                    # How to write a downstream subscriber.
 .github/workflows/deploy.yml                  # Build → push Docker images → deploy via SSH.
 ```
@@ -94,9 +95,42 @@ mapped to a typed contract, and published. The sample worker logs everything;
 your real subscribers can be in any process that references the contracts
 project.
 
+## OBS clips player
+
+Every onboarded broadcaster gets a public, no-login page that auto-plays its
+Kick **clips** — drop it straight into OBS as a *Browser* source:
+
+```
+https://${PUBLIC_HOST}/obs/clips/{slug}
+```
+
+It plays the two newest clips first, then random picks forever. The admin
+**Broadcasters** page shows each channel's URL with **Copy URL** / **Preview**
+buttons and a **Show/Hide** toggle (`KickBroadcasterAccount.ClipsDisplayEnabled`).
+Optional query params: `?muted=1`, `?overlay=1` (title/creator lower-third),
+`?refresh=N` (minutes between background list refreshes).
+
+### Why a sidecar (Cloudflare)
+
+Clips aren't in the official `api.kick.com/public/v1` API — they only exist on
+the website host (`kick.com/api/v2/channels/{slug}/clips`), which is behind
+**Cloudflare TLS-fingerprint blocking** (a plain .NET `HttpClient` gets 403).
+The **`clips-fetcher`** sidecar (`docker/clips-fetcher`, Python + `curl_cffi`)
+fetches that listing with a real browser TLS fingerprint; the gateway owns all
+Kick logic and just calls it (`IKickClipsClient`). Clip **video** (HLS on
+`clips.kick.com`) is reachable directly but sends no CORS header, so the gateway
+proxies the manifest + segments same-origin (`/api/obs/hls/...`, forwarding HTTP
+Range requests). Clip lists are cached (`Kick:ClipsCacheMinutes`, default 10) to
+bound Cloudflare hits.
+
+Aspire builds and wires the sidecar automatically (with a per-run shared secret).
+For the manual fallback, `docker compose` runs it on `localhost:8099`; see
+`docker/clips-fetcher/README.md`.
+
 ## Deploy
 
-`.github/workflows/deploy.yml` builds two Docker images, pushes to Docker Hub,
+`.github/workflows/deploy.yml` builds three Docker images (api, worker,
+clips-fetcher), pushes to Docker Hub,
 and deploys to a VPS via SSH + `docker compose`. The compose stack joins two
 shared external Docker networks:
 
@@ -122,6 +156,7 @@ shared external Docker networks:
 | `DB_CONNECTION_STRING` | `Server=…,1433;Database=kickgateway;User Id=…;Password=…;TrustServerCertificate=true;Encrypt=false` |
 | `RABBITMQ_HOST` / `RABBITMQ_PORT` / `RABBITMQ_VHOST` / `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | broker (private vhost recommended) |
 | `SEED_SUPERADMIN_USERNAME` | Kick handle (lowercase) of the first super-admin. Used only on first deploy; ignored thereafter. |
+| `CLIPS_FETCHER_SECRET` | Shared secret between the API and the clips-fetcher sidecar (any random string). |
 
 ### Pre-deploy operator checklist
 

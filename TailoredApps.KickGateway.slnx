@@ -10,4 +10,7 @@
     <Project Path="src/TailoredApps.KickGateway.Subscribers.Alerts/TailoredApps.KickGateway.Subscribers.Alerts.csproj" />
     <Project Path="src/TailoredApps.KickGateway.Subscribers.Analytics/TailoredApps.KickGateway.Subscribers.Analytics.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TailoredApps.KickGateway.Tests/TailoredApps.KickGateway.Tests.csproj" />
+  </Folder>
 </Solution>

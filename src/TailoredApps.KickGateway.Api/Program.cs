@@ -21,6 +21,9 @@ builder.AddServiceDefaults();
 // === Kick integration (shared HttpClient + signature verifier) ===
 builder.Services.AddKickIntegration(builder.Configuration);
 
+// === OBS clips player (catalog cache + CDN proxy client) ===
+builder.Services.AddObsClips();
+
 // === Database ===
 var connStr = builder.Configuration.GetConnectionString("KickGateway")
               ?? throw new InvalidOperationException("Missing connection string 'KickGateway'");
@@ -191,6 +194,9 @@ app.UseAntiforgery();
 
 // Webhook receiver stays anonymous (auth = Kick signature verification, not cookies).
 app.MapWebhookEndpoints();
+
+// Public OBS clips player + HLS proxy — anonymous so an OBS browser source can load it.
+app.MapObsClipsEndpoints();
 
 // Admin SSO endpoints — public by definition (login/callback/logout).
 app.MapAdminAuthEndpoints();

@@ -20,15 +20,27 @@ var rabbit = builder.AddRabbitMQ("rabbitmq")
     .WithDataVolume("kickgateway-rabbitmq-data")
     .WithManagementPlugin();
 
+// Browser-TLS fetch proxy used to read Kick clips past Cloudflare. Built from
+// docker/clips-fetcher; the Api reaches it over the Aspire-managed network. The
+// shared secret is generated per run and injected into both sides so they always
+// match (dev only — prod sets CLIPS_FETCHER_SECRET via deploy secrets).
+var clipsFetcherSecret = Guid.NewGuid().ToString("N");
+var clipsFetcher = builder.AddDockerfile("clips-fetcher", "../../docker/clips-fetcher")
+    .WithEnvironment("FETCH_SECRET", clipsFetcherSecret)
+    .WithHttpEndpoint(targetPort: 8080, name: "http");
+
 builder.AddProject<Projects.TailoredApps_KickGateway_Api>("kickgateway-api")
     .WithReference(kickGatewayDb)
     .WaitFor(kickGatewayDb)
     .WithReference(rabbit)
     .WaitFor(rabbit)
+    .WaitFor(clipsFetcher)
     .WithEnvironment("RabbitMq__Host", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Host))
     .WithEnvironment("RabbitMq__Port", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Port))
     .WithEnvironment("RabbitMq__Username", rabbit.Resource.UserNameParameter!)
-    .WithEnvironment("RabbitMq__Password", rabbit.Resource.PasswordParameter);
+    .WithEnvironment("RabbitMq__Password", rabbit.Resource.PasswordParameter)
+    .WithEnvironment("Kick__ClipsFetcherUrl", clipsFetcher.GetEndpoint("http"))
+    .WithEnvironment("Kick__ClipsFetcherSecret", clipsFetcherSecret);
 
 builder.AddProject<Projects.TailoredApps_KickGateway_Worker>("kickgateway-worker")
     .WithReference(rabbit)
