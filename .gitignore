@@ -8,6 +8,9 @@ appsettings.Development.json
 appsettings.local.json
 .env
 
+# Claude Code local state — settings + agent worktrees, never shared.
+.claude/
+
 # Obsidian per-user state — keep app.json / appearance.json / core-plugins.json
 # / graph.json / templates.json checked in; ignore per-user workspace + cache.
 docs/.obsidian/workspace.json
