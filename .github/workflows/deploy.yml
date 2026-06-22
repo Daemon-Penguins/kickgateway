@@ -109,7 +109,7 @@ jobs:
 
           services:
             api:
-              image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-api:latest
+              image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-api:${IMAGE_TAG:-latest}
               restart: unless-stopped
               environment:
                 - ASPNETCORE_ENVIRONMENT=Production
@@ -141,7 +141,7 @@ jobs:
                 - "traefik.docker.network=traefik-public"
 
             worker:
-              image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-worker:latest
+              image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-worker:${IMAGE_TAG:-latest}
               restart: unless-stopped
               depends_on:
                 - api
@@ -157,7 +157,7 @@ jobs:
                 - traefik-public
 
             clips-fetcher:
-              image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-clips-fetcher:latest
+              image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-clips-fetcher:${IMAGE_TAG:-latest}
               restart: unless-stopped
               environment:
                 - FETCH_SECRET=${CLIPS_FETCHER_SECRET:-}
@@ -171,6 +171,7 @@ jobs:
 
           # Write .env with secrets
           $SSH_CMD "cat > /opt/apps/kickgateway/.env << 'ENVFILE'
+          IMAGE_TAG=${{ github.sha }}
           DB_CONNECTION_STRING=${{ secrets.DB_CONNECTION_STRING }}
           RABBITMQ_HOST=${{ secrets.RABBITMQ_HOST }}
           RABBITMQ_PORT=${{ secrets.RABBITMQ_PORT }}

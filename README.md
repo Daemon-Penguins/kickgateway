@@ -143,6 +143,27 @@ shared external Docker networks:
 - `traefik-public` — Traefik handles TLS for `${PUBLIC_HOST}`
 - `db-internal`   — reaches the shared SQL Server
 
+### Image tags & rollback
+
+Every build pushes each image under **two** tags: `:latest` (moving pointer) and
+`:<commit-sha>` (immutable). The deployed compose pins to the commit SHA via an
+`IMAGE_TAG` written into the server's `.env`, so the running version is always an
+exact, reproducible image — not "whatever `latest` happens to be".
+
+To roll back, point `IMAGE_TAG` at an earlier commit's image (still in Docker Hub)
+and re-up — no rebuild needed:
+
+```bash
+ssh <deploy-user>@<host>
+cd /opt/apps/kickgateway
+sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=<previous-commit-sha>/' .env
+docker compose pull && docker compose up -d
+```
+
+The next pipeline deploy overwrites `IMAGE_TAG` with its own SHA, so re-running the
+`Build & Deploy` workflow (via `workflow_dispatch` on the desired commit, or a new
+push) returns to the pipeline-managed version.
+
 ### Required GitHub repo configuration
 
 **Variables** (Settings → Secrets and variables → Actions → Variables):
