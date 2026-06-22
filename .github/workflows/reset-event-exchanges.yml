@@ -114,10 +114,10 @@ jobs:
           echo "── Listing exchanges starting with 'TailoredApps' (expect: none) ──"
           BODY=$($SSH_CMD "docker run --rm --network '$RABBIT_NET' curlimages/curl:8.10.1 -s -u '$RABBIT_USER:$RABBIT_PASS' 'http://${RABBIT_NAME}:15672/api/exchanges/${VHOST_ENC}'")
           echo "$BODY" | python3 -c 'import json, sys
-xs = [x for x in json.load(sys.stdin) if x["name"].startswith("TailoredApps")]
-for x in xs:
-    print(" ", x["name"], "type=" + x["type"])
-sys.exit(1 if xs else 0)'
+          xs = [x for x in json.load(sys.stdin) if x["name"].startswith("TailoredApps")]
+          for x in xs:
+              print(" ", x["name"], "type=" + x["type"])
+          sys.exit(1 if xs else 0)'
           echo "✅ All TailoredApps exchanges removed"
 
       - name: Start api+worker
@@ -143,16 +143,16 @@ sys.exit(1 if xs else 0)'
           echo "── Exchanges starting with 'TailoredApps' (expect type=topic) ──"
           BODY=$($SSH_CMD "docker run --rm --network '$RABBIT_NET' curlimages/curl:8.10.1 -s -u '$RABBIT_USER:$RABBIT_PASS' 'http://${RABBIT_NAME}:15672/api/exchanges/${VHOST_ENC}'")
           echo "$BODY" | python3 -c 'import json, sys
-xs = [x for x in json.load(sys.stdin) if x["name"].startswith("TailoredApps")]
-for x in xs:
-    print(" ", x["name"], "type=" + x["type"])
-bad = [x for x in xs if x["type"] != "topic"]
-if not xs:
-    print("::error::No TailoredApps exchanges found — api+worker may have failed to start.")
-    sys.exit(1)
-if bad:
-    print("::error::Some exchanges are still not topic.")
-    sys.exit(1)'
+          xs = [x for x in json.load(sys.stdin) if x["name"].startswith("TailoredApps")]
+          for x in xs:
+              print(" ", x["name"], "type=" + x["type"])
+          bad = [x for x in xs if x["type"] != "topic"]
+          if not xs:
+              print("::error::No TailoredApps exchanges found — api+worker may have failed to start.")
+              sys.exit(1)
+          if bad:
+              print("::error::Some exchanges are still not topic.")
+              sys.exit(1)'
           echo "✅ All TailoredApps exchanges are type=topic"
 
       - name: Cleanup
