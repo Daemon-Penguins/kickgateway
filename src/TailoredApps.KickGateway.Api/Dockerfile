@@ -22,4 +22,11 @@ WORKDIR /app
 COPY --from=build /app/publish .
 EXPOSE 8080
 ENV ASPNETCORE_URLS=http://+:8080
+
+# Build provenance surfaced in the admin footer. Defaults to "dev" for local
+# builds; the deploy workflow passes the commit sha. Placed after the publish
+# so a new sha only rebuilds this tiny layer, not the .NET publish.
+ARG BUILD_SHA=dev
+ENV BUILD_SHA=${BUILD_SHA}
+
 ENTRYPOINT ["dotnet", "TailoredApps.KickGateway.Api.dll"]

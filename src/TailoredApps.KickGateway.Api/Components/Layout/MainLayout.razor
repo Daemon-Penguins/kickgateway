@@ -1,18 +1,20 @@
 @inherits LayoutComponentBase
 @using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.Extensions.Configuration
 @using TailoredApps.KickGateway.Api.Auth
+@inject IConfiguration Configuration
 <nav>
-    <strong style="margin-right:1rem;color:#fff;">Kick Gateway</strong>
+    <strong class="brand">Kick Gateway</strong>
     <a href="/admin">Dashboard</a>
     <a href="/admin/clients">Clients</a>
     <a href="/admin/broadcasters">Broadcasters</a>
     <AuthorizeView Policy="@AdminPolicies.SuperAdminOnly">
         <a href="/admin/admins">Admins</a>
     </AuthorizeView>
-    <span style="float:right;">
+    <span class="nav-auth">
         <AuthorizeView>
             <Authorized>
-                <span class="muted" style="margin-right:0.8rem;">@context.User.Identity?.Name</span>
+                <span class="muted">@context.User.Identity?.Name</span>
                 <a href="/api/auth/admin/logout">Sign out</a>
             </Authorized>
             <NotAuthorized>
@@ -24,3 +26,11 @@
 <main>
     @Body
 </main>
+<footer>
+    <span class="muted" title="@BuildSha">build @ShortSha</span>
+</footer>
+
+@code {
+    private string BuildSha => Configuration["BUILD_SHA"] is { Length: > 0 } s ? s : "dev";
+    private string ShortSha => BuildSha.Length > 7 ? BuildSha[..7] : BuildSha;
+}

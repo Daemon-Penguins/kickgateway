@@ -10,10 +10,14 @@
     <HeadOutlet @rendermode="@InteractiveServer" />
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #0e1116; color: #e6e9ef; }
-        nav { background: #1a1f29; padding: 0.7rem 1.2rem; border-bottom: 1px solid #2a3140; }
-        nav a { color: #99b1ff; margin-right: 1.2rem; text-decoration: none; font-weight: 500; }
+        nav { background: #1a1f29; padding: 0.7rem 1.2rem; border-bottom: 1px solid #2a3140; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.2rem; }
+        nav a { color: #99b1ff; text-decoration: none; font-weight: 500; }
         nav a:hover { color: #cdd6ff; }
+        nav .brand { color: #fff; font-weight: 700; }
+        nav .nav-auth { margin-left: auto; display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; }
         main { max-width: 1200px; margin: 1.5rem auto; padding: 0 1rem; }
+        footer { max-width: 1200px; margin: 2rem auto 1.5rem; padding: 0.9rem 1rem 0; border-top: 1px solid #2a3140; text-align: center; }
+        footer .muted { font-size: 0.75rem; }
         h1, h2, h3 { color: #fff; }
         table { width: 100%; border-collapse: collapse; background: #161b23; border: 1px solid #2a3140; border-radius: 8px; overflow: hidden; table-layout: auto; }
         th, td { padding: 0.6rem 0.8rem; text-align: left; border-bottom: 1px solid #2a3140; font-size: 0.9rem; vertical-align: top; word-break: break-word; overflow-wrap: anywhere; }
@@ -36,6 +40,17 @@
         .pill.red { background: #4d1e1e; color: #f0b3b3; }
         .muted { color: #6b7689; font-size: 0.8rem; }
         a { color: #99b1ff; }
+
+        @@media (max-width: 640px) {
+            nav { padding: 0.6rem 0.9rem; gap: 0.4rem 0.9rem; }
+            nav .brand { width: 100%; margin-bottom: 0.1rem; }
+            nav .nav-auth { margin-left: 0; width: 100%; justify-content: flex-start; }
+            main { margin: 1rem auto; padding: 0 0.7rem; }
+            .card { padding: 0.9rem; }
+            h1 { font-size: 1.5rem; }
+            th, td { padding: 0.5rem 0.55rem; font-size: 0.82rem; }
+            button { padding: 0.45rem 0.7rem; }
+        }
     </style>
 </head>
 <body>
