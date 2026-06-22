@@ -42,6 +42,10 @@ public static class KickEventTopology
         // On-demand channel statistics (request → response), routed by slug too.
         ConfigureMessageType<ChannelStatsRequested>(cfg, m => m.BroadcasterSlug);
         ConfigureMessageType<ChannelStats>(cfg, m => m.BroadcasterSlug);
+
+        // On-demand channel videos (VOD listing, request → response), routed by slug.
+        ConfigureMessageType<ChannelVideosRequested>(cfg, m => m.BroadcasterSlug);
+        ConfigureMessageType<ChannelVideos>(cfg, m => m.BroadcasterSlug);
     }
 
     /// <summary>

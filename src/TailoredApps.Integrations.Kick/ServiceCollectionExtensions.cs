@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using TailoredApps.Integrations.Kick.Channels;
 using TailoredApps.Integrations.Kick.Clips;
 using TailoredApps.Integrations.Kick.Sidecar;
+using TailoredApps.Integrations.Kick.Videos;
 
 namespace TailoredApps.Integrations.Kick;
 
@@ -50,6 +51,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IKickSidecarFetcher, KickSidecarFetcher>();
         services.AddSingleton<IKickClipsClient, KickClipsClient>();
         services.AddSingleton<IKickChannelClient, KickChannelClient>();
+        services.AddSingleton<IKickVideosClient, KickVideosClient>();
         return services;
     }
 }

@@ -90,6 +90,7 @@ builder.Services.AddMassTransit(x =>
     x.SetKebabCaseEndpointNameFormatter();
     x.AddConsumer<LiveFeedConsumer>();
     x.AddConsumer<ChannelStatsConsumer>();
+    x.AddConsumer<ChannelVideosConsumer>();
 
     x.UsingRabbitMq((ctx, cfg) =>
     {
@@ -140,6 +141,14 @@ builder.Services.AddMassTransit(x =>
         {
             KickEventTopology.BindKickEvent<ChannelStatsRequested>(e);
             e.ConfigureConsumer<ChannelStatsConsumer>(ctx);
+        });
+
+        // On-demand channel videos (VOD listing). Same shared-durable-queue shape as
+        // channel stats: competing consumers across replicas, one fetch per request.
+        cfg.ReceiveEndpoint("kickgateway-channel-videos", e =>
+        {
+            KickEventTopology.BindKickEvent<ChannelVideosRequested>(e);
+            e.ConfigureConsumer<ChannelVideosConsumer>(ctx);
         });
 
         // No ConfigureEndpoints — we've declared the only consumer explicitly,
