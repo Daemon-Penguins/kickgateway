@@ -38,6 +38,50 @@ public class KickVideosClientTests
         Assert.NotNull(second.StartTimeUtc);
     }
 
+    /// <summary>
+    /// The whole point of the per-video lookup: the listing's <c>video.uuid</c>
+    /// is NOT what kick.com puts in a watch URL. Without VodId every deep link
+    /// we hand out 404s.
+    /// </summary>
+    [Fact]
+    public async Task Resolves_the_watch_url_id_from_the_per_video_endpoint()
+    {
+        var client = new KickVideosClient(new StubFetcher(VideosJson()), Opts(), NullLogger<KickVideosClient>.Instance);
+
+        var videos = await client.GetVideosAsync("xqc");
+
+        Assert.Equal("019fb1dc-07d8-77fd-94c9-00c504d72bbc", videos[0].VodId);
+        Assert.Equal("019fb715-4f98-75ff-acf4-32d102f77b8c", videos[1].VodId);
+    }
+
+    [Fact]
+    public async Task Repeated_calls_resolve_each_video_only_once()
+    {
+        var fetcher = new StubFetcher(VideosJson());
+        var client = new KickVideosClient(fetcher, Opts(), NullLogger<KickVideosClient>.Instance);
+
+        await client.GetVideosAsync("xqc");
+        var afterFirst = fetcher.VideoLookups;
+        await client.GetVideosAsync("xqc");
+
+        // A poll tick every 90s must not re-resolve ids that can never change.
+        Assert.Equal(2, afterFirst);
+        Assert.Equal(2, fetcher.VideoLookups);
+    }
+
+    [Fact]
+    public async Task A_failed_lookup_leaves_VodId_null_without_losing_the_entry()
+    {
+        var fetcher = new StubFetcher(VideosJson(), resolveVideos: false);
+        var client = new KickVideosClient(fetcher, Opts(), NullLogger<KickVideosClient>.Instance);
+
+        var videos = await client.GetVideosAsync("xqc");
+
+        Assert.Equal(2, videos.Count);
+        Assert.All(videos, v => Assert.Null(v.VodId));
+        Assert.Equal("uuid-aaa", videos[0].VideoUuid); // rest of the metadata survives
+    }
+
     [Fact]
     public async Task Returns_empty_when_fetch_fails()
     {
@@ -52,7 +96,8 @@ public class KickVideosClientTests
         Assert.Empty(await client.GetVideosAsync("xqc"));
     }
 
-    private static IOptions<KickGlobalDefaults> Opts() => Options.Create(new KickGlobalDefaults());
+    private static IOptions<KickGlobalDefaults> Opts() =>
+        Options.Create(new KickGlobalDefaults { ClipsFetcherUrl = "http://sidecar" });
 
     private static string VideosJson() => JsonSerializer.Serialize(new object[]
     {
@@ -78,8 +123,41 @@ public class KickVideosClientTests
         },
     });
 
-    private sealed class StubFetcher(string? body) : IKickSidecarFetcher
+    /// <summary>
+    /// Answers both calls the client makes: the channel listing, and the
+    /// per-video lookup that carries <c>livestream.vod_id</c> (the shape kick.com
+    /// actually returns — the vod id hangs off the nested livestream, not the video).
+    /// </summary>
+    private sealed class StubFetcher(string? listing, bool resolveVideos = true) : IKickSidecarFetcher
     {
-        public Task<string?> FetchAsync(string kickUrl, CancellationToken ct = default) => Task.FromResult(body);
+        private static readonly Dictionary<string, string> VodIds = new()
+        {
+            ["uuid-aaa"] = "019fb1dc-07d8-77fd-94c9-00c504d72bbc",
+            ["uuid-bbb"] = "019fb715-4f98-75ff-acf4-32d102f77b8c",
+        };
+
+        private int _videoLookups;
+
+        public int VideoLookups => Volatile.Read(ref _videoLookups);
+
+        public Task<string?> FetchAsync(string kickUrl, CancellationToken ct = default)
+        {
+            const string marker = "/api/v1/video/";
+            var at = kickUrl.IndexOf(marker, StringComparison.Ordinal);
+            if (at < 0)
+                return Task.FromResult(listing);
+
+            Interlocked.Increment(ref _videoLookups);
+            if (!resolveVideos)
+                return Task.FromResult<string?>(null);
+
+            var uuid = kickUrl[(at + marker.Length)..];
+            var body = JsonSerializer.Serialize(new
+            {
+                uuid,
+                livestream = new { id = 1, vod_id = VodIds.GetValueOrDefault(uuid) },
+            });
+            return Task.FromResult<string?>(body);
+        }
     }
 }
