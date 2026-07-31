@@ -27,6 +27,21 @@ public record ChannelVideos
 }
 
 /// <summary>A single past broadcast (VOD) entry.</summary>
+/// <param name="LivestreamId">Kick's numeric livestream id — the exact identity of the broadcast.</param>
+/// <param name="VideoUuid">
+/// Legacy video uuid. Kept for correlation, but it does NOT work in a watch
+/// URL any more — build links from <paramref name="VodId"/>.
+/// </param>
+/// <param name="Title">Broadcast title (<c>session_title</c>), null when unset.</param>
+/// <param name="StartTimeUtc">When the broadcast started (UTC), null when Kick reported none.</param>
+/// <param name="DurationMs">Length in milliseconds; 0 while still live.</param>
+/// <param name="IsLive">True for the broadcast Kick currently flags as live.</param>
+/// <param name="ViewerCount">Viewers at the time of the fetch.</param>
+/// <param name="VodId">
+/// The id kick.com uses in the watch URL: <c>https://kick.com/{slug}/videos/{VodId}</c>.
+/// Null when the gateway could not resolve it (no video yet, or the lookup failed);
+/// a link must not be built in that case.
+/// </param>
 public record ChannelVideo(
     string LivestreamId,
     string VideoUuid,
@@ -34,4 +49,5 @@ public record ChannelVideo(
     DateTime? StartTimeUtc,
     long DurationMs,
     bool IsLive,
-    int ViewerCount);
+    int ViewerCount,
+    string? VodId = null);

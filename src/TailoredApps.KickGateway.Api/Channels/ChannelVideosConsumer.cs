@@ -61,7 +61,7 @@ public class ChannelVideosConsumer : IConsumer<ChannelVideosRequested>
             Success = true,
             Videos = videos
                 .Select(v => new ChannelVideo(
-                    v.LivestreamId, v.VideoUuid, v.Title, v.StartTimeUtc, v.DurationMs, v.IsLive, v.ViewerCount))
+                    v.LivestreamId, v.VideoUuid, v.Title, v.StartTimeUtc, v.DurationMs, v.IsLive, v.ViewerCount, v.VodId))
                 .ToList(),
         };
     }
