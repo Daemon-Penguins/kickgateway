@@ -53,6 +53,12 @@ public class KickChannelClient : IKickChannelClient
         var slug = root.ReadAsString("slug");
         if (string.IsNullOrEmpty(slug)) slug = fallbackSlug;
 
+        // chatroom.id — the Pusher channel id the realtime listener subscribes to
+        // (chatrooms.{id}.v2). Present on the website v2 channel payload; may be absent.
+        string? chatroomId = null;
+        if (root.TryGetProperty("chatroom", out var chat) && chat.ValueKind == JsonValueKind.Object)
+            chatroomId = NullIfEmpty(chat.ReadAsString("id"));
+
         // Kick's `verified`/`is_banned` are either an object (when true) or null/absent.
         var verified = root.TryGetProperty("verified", out var v) && (v.ValueKind is JsonValueKind.True or JsonValueKind.Object);
         var isBanned = root.TryGetProperty("is_banned", out var bn) && (bn.ValueKind is JsonValueKind.True or JsonValueKind.Object);
@@ -93,6 +99,7 @@ public class KickChannelClient : IKickChannelClient
         return new KickChannelInfo(
             slug,
             root.ReadAsString("id"),
+            chatroomId,
             root.ReadAsString("user_id"),
             username,
             root.ReadAsLong("followers_count"),

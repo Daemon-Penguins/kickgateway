@@ -1,6 +1,6 @@
-# CLAUDE.md — kickgateway
+# AGENTS.md — kickgateway
 
-Project-specific instructions for working with Claude in this repository. Read
+Project-specific instructions for working with Codex in this repository. Read
 this before making changes.
 
 ## What this project is
@@ -190,7 +190,7 @@ dotnet build
   or required secrets/vars.
 - **docs/CLIENT-INTEGRATION.md** — any change to the published exchange
   topology, the `KickEventTopology` helper API, or the contracts surface.
-- **CLAUDE.md (this file)** — any change to the architectural rules, stack
+- **AGENTS.md (this file)** — any change to the architectural rules, stack
   decisions, or conventions above.
 
 Avoid creating planning, decision-log, or analysis documents speculatively.

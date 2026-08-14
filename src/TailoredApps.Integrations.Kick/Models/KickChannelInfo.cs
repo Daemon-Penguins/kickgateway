@@ -9,6 +9,7 @@ namespace TailoredApps.Integrations.Kick.Models;
 public record KickChannelInfo(
     string Slug,
     string ChannelId,
+    string? ChatroomId,
     string UserId,
     string Username,
     long FollowersCount,

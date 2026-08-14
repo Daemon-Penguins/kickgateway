@@ -1,14 +1,17 @@
 @inherits LayoutComponentBase
 @using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Hosting
 @using Microsoft.Extensions.Configuration
 @using TailoredApps.KickGateway.Api.Auth
 @inject IConfiguration Configuration
+@inject IWebHostEnvironment Env
 <nav>
     <strong class="brand">Kick Gateway</strong>
     <a href="/admin">Dashboard</a>
     <a href="/admin/clients">Clients</a>
     <a href="/admin/broadcasters">Broadcasters</a>
     <AuthorizeView Policy="@AdminPolicies.SuperAdminOnly">
+        <a href="/admin/realtime">Realtime</a>
         <a href="/admin/admins">Admins</a>
     </AuthorizeView>
     <span class="nav-auth">
@@ -19,6 +22,10 @@
             </Authorized>
             <NotAuthorized>
                 <a href="/api/auth/admin/login">Sign in</a>
+                @if (Env.IsDevelopment())
+                {
+                    <a href="/api/auth/dev/login" title="Development only — sign in as superadmin without Kick OAuth">Dev sign in</a>
+                }
             </NotAuthorized>
         </AuthorizeView>
     </span>

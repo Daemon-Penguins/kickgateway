@@ -1,0 +1,263 @@
+@page "/admin/realtime"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = TailoredApps.KickGateway.Api.Auth.AdminPolicies.SuperAdminOnly)]
+@using TailoredApps.Integrations.Kick.Channels
+@inject IDbContextFactory<KickGatewayDbContext> DbFactory
+@inject IKickChannelClient Channels
+@inject IHttpClientFactory HttpFactory
+
+<h1>Realtime channels</h1>
+<p class="muted">
+    Channels the real-time (Pusher) listener follows — separate from webhooks. Realtime needs only a public
+    <strong>slug</strong>: no OAuth, no client app. The listener resolves the slug's channel/chatroom ids via the
+    sidecar and subscribes to the Pusher channels you enable below. The effective roster is the <em>union</em> of these
+    rows and your enabled webhook broadcasters, so a channel you already connected for webhooks is followed
+    automatically. SuperAdmin only.
+</p>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="card" style="border-color:#c04040;">
+        <strong style="color:#f0b3b3;">@_error</strong>
+    </div>
+}
+
+<div class="card">
+    <h3>Add a channel</h3>
+    <div style="display:flex;gap:1rem;align-items:flex-end;flex-wrap:wrap;">
+        <label style="margin:0;"><span class="muted">Kick slug</span><br />
+            <input placeholder="e.g. xqc" @bind="_newSlug" @bind:event="oninput" />
+        </label>
+        <label style="margin:0;"><span class="muted">Display name (optional)</span><br />
+            <input placeholder="friendly label" @bind="_newName" @bind:event="oninput" />
+        </label>
+        <button @onclick="Add">Add channel</button>
+    </div>
+    <p class="muted" style="margin-bottom:0;">The slug is the last path segment of a Kick channel URL (<code>kick.com/<strong>slug</strong></code>). It's added enabled, capturing chat + channel events; video is off until you turn it on (and the listener's global video switch is on).</p>
+</div>
+
+<div class="card">
+    <h3>Channels</h3>
+    @if (_rows is null)
+    {
+        <p>Loading…</p>
+    }
+    else if (_rows.Count == 0)
+    {
+        <p class="muted">None yet. Add one above.</p>
+    }
+    else
+    {
+        <div class="table-scroll">
+        <table>
+            <thead>
+                <tr><th>Channel</th><th>Resolved</th><th>Status</th><th>Capture</th><th></th></tr>
+            </thead>
+            <tbody>
+            @foreach (var c in _rows)
+            {
+                <tr>
+                    <td>
+                        <strong>@(string.IsNullOrWhiteSpace(c.DisplayName) ? c.Slug : c.DisplayName)</strong>
+                        <br /><span class="muted">@c.Slug</span>
+                    </td>
+                    <td>
+                        @if (!string.IsNullOrEmpty(c.ChannelId))
+                        {
+                            <span class="muted">chan @c.ChannelId</span><br />
+                            <span class="muted">chat @(c.ChatroomId ?? "—")</span><br />
+                            <span class="muted">@(c.LastResolvedAt is { } r ? $"resolved {r:u}" : "")</span>
+                        }
+                        else
+                        {
+                            <span class="muted">not resolved — Verify to check the slug</span>
+                        }
+                    </td>
+                    <td>
+                        @(c.IsEnabled
+                            ? new MarkupString("<span class='pill green'>enabled</span>")
+                            : new MarkupString("<span class='pill red'>disabled</span>"))
+                        @if (_verify.TryGetValue(c.Id, out var v))
+                        {
+                            <br /><span class="muted">@v</span>
+                        }
+                        @if (_probe.TryGetValue(c.Id, out var p))
+                        {
+                            <br /><span class="muted">@p</span>
+                        }
+                    </td>
+                    <td>
+                        <button class="secondary" @onclick="() => Toggle(c.Id, x => x.CaptureChat = !x.CaptureChat)"
+                                title="Subscribe chatrooms.{id}.v2 — chat, bans/timeouts, pins, polls, chatroom modes">
+                            Chat: @(c.CaptureChat ? "on" : "off")
+                        </button>
+                        <button class="secondary" @onclick="() => Toggle(c.Id, x => x.CaptureChannel = !x.CaptureChannel)"
+                                title="Subscribe channel.{id} — subs, gifts, follows, live/offline, host, rewards">
+                            Channel: @(c.CaptureChannel ? "on" : "off")
+                        </button>
+                        <button class="secondary" @onclick="() => Toggle(c.Id, x => x.VideoCaptureEnabled = !x.VideoCaptureEnabled)"
+                                title="Forward live video segments (best-effort) while streaming. Needs the listener's global Kick:Realtime:Video:Enabled switch.">
+                            Video: @(c.VideoCaptureEnabled ? "on" : "off")
+                        </button>
+                    </td>
+                    <td>
+                        <button @onclick="() => Verify(c.Id)">Verify</button>
+                        <button class="secondary" @onclick="() => Probe(c.Id)" title="Test-fetch this channel's live HLS from the Api — proves whether the capture loop can pull video right now, independent of the listener">Probe video</button>
+                        <button class="secondary" @onclick="() => Toggle(c.Id, x => x.IsEnabled = !x.IsEnabled)">
+                            @(c.IsEnabled ? "Disable" : "Enable")
+                        </button>
+                        <button class="danger" @onclick="() => Delete(c.Id)">Delete</button>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+        </div>
+        <p class="muted">Changes take effect on the listener's next roster refresh (within ~30s).</p>
+    }
+</div>
+
+@code {
+    List<RealtimeChannel>? _rows;
+    string? _newSlug;
+    string? _newName;
+    string? _error;
+
+    // Transient per-row verify result (not persisted) — e.g. "LIVE · 1234 viewers".
+    readonly Dictionary<Guid, string> _verify = new();
+
+    // Transient per-row "Probe video" result — tests the actual live-HLS fetch path.
+    readonly Dictionary<Guid, string> _probe = new();
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    async Task Reload()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _rows = await db.RealtimeChannels.OrderBy(x => x.Slug).ToListAsync();
+    }
+
+    async Task Add()
+    {
+        _error = null;
+        var slug = (_newSlug ?? "").Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(slug)) { _error = "Enter a slug."; return; }
+        if (slug.Contains('/') || slug.Contains(' ')) { _error = "Enter just the slug, not a URL."; return; }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.RealtimeChannels.AnyAsync(c => c.Slug == slug))
+        {
+            _error = $"'{slug}' is already added.";
+            return;
+        }
+
+        db.RealtimeChannels.Add(new RealtimeChannel
+        {
+            Slug = slug,
+            DisplayName = string.IsNullOrWhiteSpace(_newName) ? null : _newName!.Trim(),
+        });
+        await db.SaveChangesAsync();
+        _newSlug = "";
+        _newName = "";
+        await Reload();
+
+        // Immediate feedback that the slug is real + whether it's live right now.
+        var added = _rows?.FirstOrDefault(x => x.Slug == slug);
+        if (added is not null) await Verify(added.Id);
+    }
+
+    // Apply a mutation to one row and persist. Server-side gate is the page's SuperAdminOnly policy.
+    async Task Toggle(Guid id, Action<RealtimeChannel> apply)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var row = await db.RealtimeChannels.FindAsync(id);
+        if (row is null) return;
+        apply(row);
+        row.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        await Reload();
+    }
+
+    async Task Verify(Guid id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var row = await db.RealtimeChannels.FindAsync(id);
+        if (row is null) return;
+        try
+        {
+            var info = await Channels.GetChannelAsync(row.Slug, CancellationToken.None);
+            if (info is null || string.IsNullOrEmpty(info.ChannelId))
+            {
+                _verify[id] = "not found / not resolvable";
+                return;
+            }
+            row.ChannelId = info.ChannelId;
+            row.ChatroomId = info.ChatroomId;
+            row.LastResolvedAt = DateTime.UtcNow;
+            row.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+            _verify[id] = info.IsBanned
+                ? "channel is banned"
+                : info.IsLive ? $"LIVE · {info.ViewerCount} viewers" : "offline";
+        }
+        catch (Exception ex)
+        {
+            _verify[id] = "verify failed: " + ex.Message;
+        }
+        await Reload();
+    }
+
+    async Task Delete(Guid id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var row = await db.RealtimeChannels.FindAsync(id);
+        if (row is null) return;
+        db.RealtimeChannels.Remove(row);
+        await db.SaveChangesAsync();
+        _verify.Remove(id);
+        _probe.Remove(id);
+        await Reload();
+    }
+
+    // Tests the whole live-video fetch path from the Api, so you can see — in the browser — whether
+    // the capture loop would be able to pull this channel's video right now. Independent of the
+    // realtime listener and the global video switch: it isolates "is the source fetchable?" from
+    // "is the listener capturing?".
+    async Task Probe(Guid id)
+    {
+        var row = _rows?.FirstOrDefault(r => r.Id == id);
+        if (row is null) return;
+        _probe[id] = "probing…";
+
+        try
+        {
+            var info = await Channels.GetChannelAsync(row.Slug, CancellationToken.None);
+            if (info is null) { _probe[id] = "❌ channel not found / unresolvable via sidecar"; return; }
+            if (!info.IsLive) { _probe[id] = "⚪ offline — video only captures while the channel is live"; return; }
+            if (string.IsNullOrEmpty(info.PlaybackUrl)) { _probe[id] = "❌ LIVE but channel payload has no playback_url"; return; }
+
+            var url = info.PlaybackUrl!;
+            var host = Uri.TryCreate(url, UriKind.Absolute, out var u) ? u.Host : "?";
+
+            var http = HttpFactory.CreateClient("VideoProbe");
+            using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _probe[id] = $"❌ LIVE, host {host} — master playlist returned HTTP {(int)resp.StatusCode}. The capture loop can't fetch it.";
+                return;
+            }
+
+            var body = await resp.Content.ReadAsStringAsync();
+            var variants = body.Split('\n').Count(l => l.StartsWith("#EXT-X-STREAM-INF", StringComparison.Ordinal));
+            if (variants > 0)
+                _probe[id] = $"✅ LIVE, host {host} — master playlist OK, {variants} variant(s). Source is fetchable; if segments still don't publish, the listener isn't running video (REALTIME_VIDEO_ENABLED + this channel's Video toggle).";
+            else if (body.Contains("#EXTINF", StringComparison.Ordinal))
+                _probe[id] = $"✅ LIVE, host {host} — media playlist OK (single rendition). Source is fetchable.";
+            else
+                _probe[id] = $"⚠ LIVE, host {host} — fetched {body.Length} B but it isn't a recognizable m3u8.";
+        }
+        catch (Exception ex)
+        {
+            _probe[id] = "❌ probe error: " + ex.Message;
+        }
+    }
+}

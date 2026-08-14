@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using TailoredApps.KickGateway.Api.Data;
 
@@ -11,9 +12,11 @@ using TailoredApps.KickGateway.Api.Data;
 namespace TailoredApps.KickGateway.Api.Data.Migrations
 {
     [DbContext(typeof(KickGatewayDbContext))]
-    partial class KickGatewayDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260724070133_AddRealtimeChannels")]
+    partial class AddRealtimeChannels
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
