@@ -6,12 +6,14 @@ WORKDIR /src
 
 COPY src/TailoredApps.Integrations.Kick/TailoredApps.Integrations.Kick.csproj      src/TailoredApps.Integrations.Kick/
 COPY src/TailoredApps.KickGateway.Contracts/TailoredApps.KickGateway.Contracts.csproj src/TailoredApps.KickGateway.Contracts/
+COPY src/TailoredApps.KickGateway.Data/TailoredApps.KickGateway.Data.csproj        src/TailoredApps.KickGateway.Data/
 COPY src/TailoredApps.KickGateway.ServiceDefaults/TailoredApps.KickGateway.ServiceDefaults.csproj src/TailoredApps.KickGateway.ServiceDefaults/
 COPY src/TailoredApps.KickGateway.Api/TailoredApps.KickGateway.Api.csproj          src/TailoredApps.KickGateway.Api/
 RUN dotnet restore src/TailoredApps.KickGateway.Api/TailoredApps.KickGateway.Api.csproj
 
 COPY src/TailoredApps.Integrations.Kick/      src/TailoredApps.Integrations.Kick/
 COPY src/TailoredApps.KickGateway.Contracts/  src/TailoredApps.KickGateway.Contracts/
+COPY src/TailoredApps.KickGateway.Data/       src/TailoredApps.KickGateway.Data/
 COPY src/TailoredApps.KickGateway.ServiceDefaults/ src/TailoredApps.KickGateway.ServiceDefaults/
 COPY src/TailoredApps.KickGateway.Api/        src/TailoredApps.KickGateway.Api/
 RUN dotnet publish src/TailoredApps.KickGateway.Api/TailoredApps.KickGateway.Api.csproj \
