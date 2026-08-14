@@ -92,6 +92,9 @@
                         @if (CanToggle(b))
                         {
                             <button class="secondary" @onclick="() => Toggle(b.Id)">@(b.IsEnabled ? "Disable" : "Enable")</button>
+                            <button class="secondary" @onclick="() => ToggleVideoCapture(b.Id)" title="Forward this channel's live video segments to subscribers (best-effort) while it streams. Requires the realtime listener's global video switch to be on.">
+                                @(b.VideoCaptureEnabled ? "Video capture: on" : "Video capture: off")
+                            </button>
                         }
                     </td>
                 </tr>
@@ -261,6 +264,18 @@
         if (b is null) return;
         if (!CanManageClips(b)) return;        // server-side check; UI hides the button too
         b.ClipsDisplayEnabled = !b.ClipsDisplayEnabled;
+        b.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        await Reload();
+    }
+
+    async Task ToggleVideoCapture(Guid id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var b = await db.Broadcasters.FindAsync(id);
+        if (b is null) return;
+        if (!CanToggle(b)) return;             // server-side check; UI hides the button too
+        b.VideoCaptureEnabled = !b.VideoCaptureEnabled;
         b.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync();
         await Reload();

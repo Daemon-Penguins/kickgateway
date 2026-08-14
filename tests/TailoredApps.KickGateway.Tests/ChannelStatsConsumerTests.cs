@@ -15,7 +15,7 @@ public class ChannelStatsConsumerTests
     public async Task Publishes_ChannelStats_with_viewers_on_request()
     {
         var info = new KickChannelInfo(
-            Slug: "xqc", ChannelId: "668", UserId: "676", Username: "XQc",
+            Slug: "xqc", ChannelId: "668", ChatroomId: "12345", UserId: "676", Username: "XQc",
             FollowersCount: 1_000_000, Verified: true, IsBanned: false,
             VodEnabled: true, SubscriptionEnabled: true, IsAffiliate: true,
             ProfilePicUrl: "https://img/pfp.webp", BannerImageUrl: "https://img/banner.webp",

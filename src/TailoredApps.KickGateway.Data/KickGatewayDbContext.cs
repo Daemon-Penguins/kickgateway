@@ -9,9 +9,11 @@ public class KickGatewayDbContext : DbContext
 
     public DbSet<KickClientApp> ClientApps => Set<KickClientApp>();
     public DbSet<KickBroadcasterAccount> Broadcasters => Set<KickBroadcasterAccount>();
+    public DbSet<RealtimeChannel> RealtimeChannels => Set<RealtimeChannel>();
     public DbSet<KickEventSubscription> EventSubscriptions => Set<KickEventSubscription>();
     public DbSet<PkceStateEntry> PkceStates => Set<PkceStateEntry>();
     public DbSet<ReceivedWebhook> ReceivedWebhooks => Set<ReceivedWebhook>();
+    public DbSet<ReceivedRealtimeEvent> ReceivedRealtimeEvents => Set<ReceivedRealtimeEvent>();
     public DbSet<AdminUser> AdminUsers => Set<AdminUser>();
     public DbSet<AdminUserRole> AdminUserRoles => Set<AdminUserRole>();
 
@@ -49,10 +51,21 @@ public class KickGatewayDbContext : DbContext
             // Existing broadcasters opt into the public OBS clips page by default,
             // with the original behaviour: newest-first, two lead-in clips, shuffle.
             b.Property(x => x.ClipsDisplayEnabled).HasDefaultValue(true);
+            b.Property(x => x.VideoCaptureEnabled).HasDefaultValue(true);
             b.Property(x => x.ClipsSortMode).HasDefaultValue(ClipsSortMode.Latest);
             b.Property(x => x.ClipsTimeWindow).HasDefaultValue(ClipsTimeWindow.All);
             b.Property(x => x.ClipsLeadInCount).HasDefaultValue(2);
             b.Property(x => x.ClipsShuffle).HasDefaultValue(true);
+        });
+
+        modelBuilder.Entity<RealtimeChannel>(b =>
+        {
+            b.HasKey(x => x.Id);
+            b.HasIndex(x => x.Slug).IsUnique();
+            b.Property(x => x.IsEnabled).HasDefaultValue(true);
+            b.Property(x => x.CaptureChat).HasDefaultValue(true);
+            b.Property(x => x.CaptureChannel).HasDefaultValue(true);
+            b.Property(x => x.VideoCaptureEnabled).HasDefaultValue(false);
         });
 
         modelBuilder.Entity<KickEventSubscription>(b =>
@@ -76,6 +89,13 @@ public class KickGatewayDbContext : DbContext
             b.HasKey(x => x.MessageId);
             b.HasIndex(x => x.ReceivedAt);
             b.HasIndex(x => x.BroadcasterAccountId);
+        });
+
+        modelBuilder.Entity<ReceivedRealtimeEvent>(b =>
+        {
+            b.HasKey(x => x.DedupeKey);
+            b.HasIndex(x => x.ReceivedAt);
+            b.HasIndex(x => x.Slug);
         });
 
         modelBuilder.Entity<AdminUser>(b =>

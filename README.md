@@ -16,7 +16,9 @@ doesn't care about. See `docs/CLIENT-INTEGRATION.md`.
 src/
   TailoredApps.Integrations.Kick/             # Kick REST + OAuth (PKCE) + sig-verify client.
   TailoredApps.KickGateway.Contracts/         # MassTransit message contracts + topology helper (shared lib).
+  TailoredApps.KickGateway.Data/              # Shared EF Core DbContext + entities + migrations (Api + Realtime).
   TailoredApps.KickGateway.Api/               # WebAPI + Blazor admin + webhook receiver. Dockerfile here.
+  TailoredApps.KickGateway.Realtime/          # Real-time Pusher listener + live-video capture. Dockerfile here.
   TailoredApps.KickGateway.Worker/            # Sample subscriber, all channels (logs every contract). Dockerfile here.
   TailoredApps.KickGateway.Subscribers.*/     # Three sample apps demonstrating per-channel filtering.
   TailoredApps.KickGateway.AppHost/           # .NET Aspire orchestrator (F5 from VS).
@@ -46,6 +48,22 @@ docs/CLIENT-INTEGRATION.md                    # How to write a downstream subscr
   broadcaster slug is the routing key. Each subscriber binds its durable
   queue to the channels it cares about (or `#` for all). Workers can scale
   horizontally; consumers on the same queue compete.
+- **Real-time listener.** The `Realtime` service subscribes to Kick's
+  *unofficial* Pusher WebSocket (`ws-us2.pusher.com` — a separate origin, not
+  Cloudflare-gated) and republishes the much richer event catalogue (deletions,
+  pins, polls, chatroom modes, host/raid, follower ticks, …) as a **separate**
+  `Contracts.Realtime.*` family on their own slug-routed exchanges. It reuses
+  the clips-fetcher sidecar only to resolve each slug's `channel_id`/`chatroom_id`,
+  and records+publishes with the same inbox+outbox durability as the webhook path.
+  Best-effort/unsigned — a complement to the signed webhook stream, not a
+  replacement. Its roster is the **union** of the channels added on the
+  **Realtime** admin page (`/admin/realtime` — slug-only, no OAuth, with
+  per-event capture toggles) and your enabled webhook broadcasters.
+- **Live-video capture (opt-in).** When `Kick:Realtime:Video:Enabled` is on,
+  the listener also pulls each live channel's HLS stream and forwards the raw
+  segments (`Contracts.Realtime.Media.LiveVideoSegment`) — published directly
+  (bypassing the outbox) with a short TTL, so subscribers can store the video
+  themselves. Off by default; heavy. Per-channel toggle in the admin UI.
 
 ## Quick start
 
@@ -89,6 +107,10 @@ Open `https://localhost:5001/admin`:
    appears here.
 3. Click **Enroll all events** to subscribe the broadcaster to every event
    in `KickEventTypes.All` via `/public/v1/events/subscriptions`.
+4. **Realtime** (SuperAdmin) — add channels for the real-time listener by
+   **slug** (no OAuth needed). Toggle chat / channel / video capture per
+   channel and **Verify** a slug to resolve its ids + live status. This roster
+   is unioned with your enabled webhook broadcasters.
 
 Webhook deliveries hit `/api/webhooks/kick`, get signature-verified, deduped,
 mapped to a typed contract, and published. The sample worker logs everything;
@@ -171,6 +193,7 @@ push) returns to the pipeline-managed version.
 | Variable | What |
 | --- | --- |
 | `DOCKERHUB_NAMESPACE` | Docker Hub user/org under which images are pushed (e.g. `myorg`) |
+| `REALTIME_VIDEO_ENABLED` | Optional. `true` turns on the realtime listener's live-video capture (heavy). Defaults to `false`. |
 
 **Secrets** (Settings → Secrets and variables → Actions → Secrets):
 

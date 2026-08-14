@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Namespace deliberately kept as ...Api.Data: the DbContext + entities were
+         extracted out of the Api project into this shared library (referenced by the
+         Api and the Realtime listener), but the CLR namespaces were preserved so
+         existing `using TailoredApps.KickGateway.Api.Data;` and the already-applied
+         EF migration history (namespace ...Api.Data.Migrations) stay valid. -->
+    <RootNamespace>TailoredApps.KickGateway.Api.Data</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.*" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.*" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.*" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.*" />
+    <PackageReference Include="MassTransit" Version="8.*" />
+    <PackageReference Include="MassTransit.EntityFrameworkCore" Version="8.*" />
+  </ItemGroup>
+</Project>

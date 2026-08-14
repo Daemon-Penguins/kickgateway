@@ -23,6 +23,11 @@ builder.AddServiceDefaults();
 // === Kick integration (shared HttpClient + signature verifier) ===
 builder.Services.AddKickIntegration(builder.Configuration);
 
+// Browser-UA client used by the /admin/realtime "Probe video" diagnostic to test-fetch a
+// channel's live HLS playlist — the same path the realtime listener's capture loop uses.
+builder.Services.AddHttpClient("VideoProbe", c => c.DefaultRequestHeaders.UserAgent.ParseAdd(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"));
+
 // === OBS clips player (catalog cache + CDN proxy client) ===
 builder.Services.AddObsClips();
 
@@ -50,7 +55,11 @@ builder.Services.AddAuthentication(AdminClaims.AuthenticationScheme)
     {
         o.Cookie.Name = "kickgw_admin";
         o.Cookie.HttpOnly = true;
-        o.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        // Always require HTTPS in prod. In dev, follow the request so the cookie also
+        // sticks over plain-http localhost (used by the dev-only local sign-in).
+        o.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
+            ? CookieSecurePolicy.SameAsRequest
+            : CookieSecurePolicy.Always;
         o.Cookie.SameSite = SameSiteMode.Lax;
         o.ExpireTimeSpan = TimeSpan.FromDays(14);
         o.SlidingExpiration = true;
@@ -222,6 +231,11 @@ app.MapObsClipsEndpoints();
 
 // Admin SSO endpoints — public by definition (login/callback/logout).
 app.MapAdminAuthEndpoints();
+
+// Dev-only local sign-in — bypasses Kick OAuth for local work + manual testing.
+// Mapped ONLY in Development; never exists in Production.
+if (app.Environment.IsDevelopment())
+    app.MapDevAuthEndpoints();
 
 // All admin-facing REST endpoints — must be logged in. Per-client checks
 // happen inside the handlers. Group all under a single "/" gate so attribute-

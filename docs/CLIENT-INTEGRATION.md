@@ -112,6 +112,86 @@ Console.WriteLine($"{s.BroadcasterSlug}: live={s.IsLive} viewers={s.ViewerCount}
 
 ---
 
+## Real-time events (Kick Pusher) — the richer, best-effort stream
+
+The webhook contracts above are Kick's **official, signed** events. Kick's website is
+driven by a much richer **real-time stream** (Pusher WebSocket) carrying events the
+webhook API never exposes: message deletions, pins, polls, chatroom mode changes
+(slow/followers-only/sub-only/emote-only), host/raid, follower-count ticks,
+timeouts/unbans, gifted-sub recipient lists, and more.
+
+The gateway's **realtime listener** subscribes to that stream for every managed
+broadcaster and republishes it as a **separate** contract family in
+`TailoredApps.KickGateway.Contracts.Realtime`, on **their own** topic exchanges — so the
+signed-webhook stream is untouched and there's no double-publishing. Bind with
+`KickRealtimeTopology`, exactly like `KickEventTopology`:
+
+```csharp
+using TailoredApps.KickGateway.Contracts.Realtime;
+
+KickRealtimeTopology.ConfigurePublishTopology(cfg);
+cfg.ReceiveEndpoint("myapp-realtime-chat", e =>
+{
+    KickRealtimeTopology.BindKickRealtimeEvent<RealtimeChatMessage>(e, "xqc");
+    e.ConfigureConsumer<MyRealtimeChatConsumer>(ctx);
+});
+```
+
+Contracts (all derive `KickRealtimeEventBase` / `IKickRealtimeEvent`):
+
+| Contract | Fires on |
+|---|---|
+| `RealtimeChatMessage` | chat message / reply (badges, color, reply metadata) |
+| `RealtimeMessageDeleted` | a message was removed |
+| `RealtimeUserBanned` / `RealtimeUserUnbanned` | ban or timeout / lift |
+| `RealtimePinnedMessageCreated` / `RealtimePinnedMessageDeleted` | pin / unpin |
+| `RealtimePollUpdate` / `RealtimePollDelete` | poll created or voted / ended |
+| `RealtimeChatroomUpdated` | slow / followers-only / sub-only / emote-only mode change |
+| `RealtimeChatroomClear` | chat cleared |
+| `RealtimeSubscription` / `RealtimeGiftedSubscriptions` / `RealtimeLuckyGiftRecipients` | sub / gift drop / recipients |
+| `RealtimeStreamerLive` / `RealtimeStreamEnd` / `RealtimeStreamHost` | live / offline / host-raid |
+| `RealtimeFollowersUpdated` | follower-count tick |
+| `RealtimeKicksGifted` / `RealtimeRewardRedeemed` | Kicks gift / reward redemption |
+| `KickRealtimeUnknown` | any event name not yet mapped (drift-proof — inspect `RawData`) |
+
+The envelope carries `BroadcasterSlug` (the routing key), `KickChannelId`,
+`KickChatroomId`, `PusherEvent` (raw event name), `DedupeKey`, `ReceivedAt`, and
+`RawData` (the inner JSON, for anything not surfaced as a typed field).
+
+> **This stream is unofficial and best-effort** — unsigned, with reverse-engineered event
+> names that can drift. Treat it as a complement to the signed webhook stream, not a
+> replacement. The listener records + publishes with the same inbox+outbox durability as
+> the webhook path (once a frame is accepted it won't be lost between the listener and
+> RabbitMQ), but Kick can change or drop these events at any time.
+
+### Live video segments (opt-in, ephemeral)
+
+When the listener's video capture is enabled, it also pulls each managed, **live** channel's
+HLS stream and forwards the raw segments as
+`TailoredApps.KickGateway.Contracts.Realtime.Media.LiveVideoSegment` on its **own** exchange.
+Each message carries the segment bytes (`Data`), `MediaSequence`, `Duration`, `IsInitSegment`
+(the fMP4 init segment), `ContentType`, and `VariantBandwidth`. Reassemble in `MediaSequence`
+order (init segment first) and remux if you want a playable file.
+
+```csharp
+using TailoredApps.KickGateway.Contracts.Realtime.Media;
+
+KickMediaTopology.ConfigurePublishTopology(cfg);
+cfg.ReceiveEndpoint("myapp-video-xqc", e =>
+{
+    e.AutoDelete = true;   // segments are ephemeral — don't accumulate a durable backlog
+    KickMediaTopology.BindLiveVideo(e, "xqc");
+    e.ConfigureConsumer<MyVideoConsumer>(ctx);
+});
+```
+
+> **Best-effort by design.** Video segments are published **directly** (NOT through the
+> outbox) with a short broker TTL, so undelivered segments expire instead of piling up. If
+> your consumer is offline you miss that window — it's a live relay, not an archive. Use a
+> short-lived / auto-delete queue.
+
+---
+
 ## Step 1 — Get the contracts assembly
 
 You have two options. Both produce the same CLR types, which is all that

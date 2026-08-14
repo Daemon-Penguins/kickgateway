@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.EntityFrameworkCore;
@@ -117,21 +116,9 @@ public static class AdminAuthEndpoints
             admin.UpdatedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
 
-            var identity = new ClaimsIdentity(AdminClaims.AuthenticationScheme);
-            identity.AddClaim(new Claim(ClaimTypes.NameIdentifier, admin.KickUserId));
-            identity.AddClaim(new Claim(ClaimTypes.Name, admin.Username));
-            identity.AddClaim(new Claim(AdminClaims.AdminUserId, admin.Id.ToString()));
-            foreach (var r in admin.Roles)
-            {
-                if (r.Role == AdminRole.SuperAdmin)
-                    identity.AddClaim(new Claim(AdminClaims.GlobalRole, nameof(AdminRole.SuperAdmin)));
-                else if (r.KickClientAppId is { } cid)
-                    identity.AddClaim(new Claim(AdminClaims.ClientRole, $"{cid}:{r.Role}"));
-            }
-
             await http.SignInAsync(
                 AdminClaims.AuthenticationScheme,
-                new ClaimsPrincipal(identity),
+                AdminPrincipalFactory.Build(admin),
                 new AuthenticationProperties { IsPersistent = true, ExpiresUtc = DateTimeOffset.UtcNow.AddDays(14) });
 
             var returnUrl = entry.Flow.StartsWith("admin:") ? entry.Flow[6..] : "/admin";

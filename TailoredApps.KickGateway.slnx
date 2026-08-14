@@ -4,11 +4,14 @@
     <Project Path="src/TailoredApps.KickGateway.Api/TailoredApps.KickGateway.Api.csproj" />
     <Project Path="src/TailoredApps.KickGateway.AppHost/TailoredApps.KickGateway.AppHost.csproj" />
     <Project Path="src/TailoredApps.KickGateway.Contracts/TailoredApps.KickGateway.Contracts.csproj" />
+    <Project Path="src/TailoredApps.KickGateway.Data/TailoredApps.KickGateway.Data.csproj" />
+    <Project Path="src/TailoredApps.KickGateway.Realtime/TailoredApps.KickGateway.Realtime.csproj" />
     <Project Path="src/TailoredApps.KickGateway.ServiceDefaults/TailoredApps.KickGateway.ServiceDefaults.csproj" />
     <Project Path="src/TailoredApps.KickGateway.Worker/TailoredApps.KickGateway.Worker.csproj" />
     <Project Path="src/TailoredApps.KickGateway.Subscribers.Loyalty/TailoredApps.KickGateway.Subscribers.Loyalty.csproj" />
     <Project Path="src/TailoredApps.KickGateway.Subscribers.Alerts/TailoredApps.KickGateway.Subscribers.Alerts.csproj" />
     <Project Path="src/TailoredApps.KickGateway.Subscribers.Analytics/TailoredApps.KickGateway.Subscribers.Analytics.csproj" />
+    <Project Path="src/TailoredApps.KickGateway.Subscribers.VideoRecorder/TailoredApps.KickGateway.Subscribers.VideoRecorder.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/TailoredApps.KickGateway.Tests/TailoredApps.KickGateway.Tests.csproj" />

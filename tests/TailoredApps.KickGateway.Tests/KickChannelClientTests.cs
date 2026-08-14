@@ -32,6 +32,8 @@ public class KickChannelClientTests
         Assert.NotNull(info.StreamStartedAt);
         Assert.Equal("Just Chatting", info.Category?.Name);
         Assert.Equal(500, info.Category?.Viewers);
+        Assert.Equal("668", info.ChannelId);
+        Assert.Equal("12345", info.ChatroomId);              // chatroom.id → Pusher channel id
         Assert.Contains("\"slug\":\"xqc\"", info.RawJson);  // full payload preserved
     }
 
@@ -63,6 +65,7 @@ public class KickChannelClientTests
         id = 668,
         user_id = 676,
         slug = "xqc",
+        chatroom = new { id = 12345, channel_id = 668 },
         is_banned = (object?)null,
         playback_url = "https://stream.example/hls.m3u8",
         vod_enabled = true,

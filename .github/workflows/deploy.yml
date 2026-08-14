@@ -19,6 +19,7 @@ env:
   # it's not sensitive but it does identify the owner).
   API_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-api
   WORKER_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-worker
+  REALTIME_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-realtime
   CLIPS_FETCHER_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-clips-fetcher
 
 jobs:
@@ -63,6 +64,18 @@ jobs:
             ${{ env.WORKER_IMAGE }}:${{ github.sha }}
           cache-from: type=gha,scope=worker
           cache-to: type=gha,scope=worker,mode=max
+
+      - name: Build & push Realtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/TailoredApps.KickGateway.Realtime/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REALTIME_IMAGE }}:latest
+            ${{ env.REALTIME_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha,scope=realtime
+          cache-to: type=gha,scope=realtime,mode=max
 
       - name: Build & push clips-fetcher image
         uses: docker/build-push-action@v6
@@ -158,6 +171,29 @@ jobs:
                 - default
                 - traefik-public
 
+            realtime:
+              image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-realtime:${IMAGE_TAG:-latest}
+              restart: unless-stopped
+              depends_on:
+                - api
+              environment:
+                - DOTNET_ENVIRONMENT=Production
+                - ConnectionStrings__KickGateway=${DB_CONNECTION_STRING:-}
+                - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
+                - RabbitMq__Port=${RABBITMQ_PORT:-5672}
+                - RabbitMq__VirtualHost=${RABBITMQ_VHOST:-/}
+                - RabbitMq__Username=${RABBITMQ_USERNAME:-}
+                - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
+                # Sidecar: used to resolve each slug's channel_id/chatroom_id past Cloudflare.
+                - Kick__ClipsFetcherUrl=http://clips-fetcher:8080
+                - Kick__ClipsFetcherSecret=${CLIPS_FETCHER_SECRET:-}
+                # Live-video capture is opt-in — set REALTIME_VIDEO_ENABLED=true to turn it on.
+                - Kick__Realtime__Video__Enabled=${REALTIME_VIDEO_ENABLED:-false}
+              networks:
+                - default
+                - traefik-public
+                - db-internal
+
             clips-fetcher:
               image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-clips-fetcher:${IMAGE_TAG:-latest}
               restart: unless-stopped
@@ -184,6 +220,7 @@ jobs:
           SEED_SUPERADMIN_USERNAME=${{ secrets.SEED_SUPERADMIN_USERNAME }}
           PUBLIC_HOST=${{ secrets.PUBLIC_HOST }}
           CLIPS_FETCHER_SECRET=${{ secrets.CLIPS_FETCHER_SECRET }}
+          REALTIME_VIDEO_ENABLED=${{ vars.REALTIME_VIDEO_ENABLED }}
           ENVFILE"
 
           # Ensure shared external networks exist (idempotent).
