@@ -19,7 +19,7 @@ src/
   TailoredApps.KickGateway.Data/              # Shared EF Core DbContext + entities + migrations (Api + Realtime).
   TailoredApps.KickGateway.Api/               # WebAPI + Blazor admin + webhook receiver. Dockerfile here.
   TailoredApps.KickGateway.Realtime/          # Real-time Pusher listener + live-video capture. Dockerfile here.
-  TailoredApps.KickGateway.Mcp/               # MCP server (stdio) over the chat-analytics API — run locally, not deployed.
+  TailoredApps.KickGateway.Mcp/               # MCP server over the chat-analytics API — `mcp` container (/mcp) or local stdio. Dockerfile here.
   TailoredApps.KickGateway.Worker/            # Sample subscriber, all channels (logs every contract). Dockerfile here.
   TailoredApps.KickGateway.Subscribers.*/     # Three sample apps demonstrating per-channel filtering.
   TailoredApps.KickGateway.AppHost/           # .NET Aspire orchestrator (F5 from VS).
@@ -71,7 +71,9 @@ docs/CHAT-ANALYTICS.md                        # Chatter profiles + interaction g
   `ChatMentions`, `ChatterEvents`) and serves read-only chatter profiles, pair
   dynamics and a who-talks-to-whom graph under `/api/analytics/*` (admin cookie or
   `Analytics:ApiKey`). `TailoredApps.KickGateway.Mcp` exposes those as MCP tools
-  for Claude & co. See `docs/CHAT-ANALYTICS.md`.
+  for Claude & co. It is deployed as the `mcp` container at `https://${PUBLIC_HOST}/mcp`
+  (Bearer = the analytics key) and can also run locally over stdio. See
+  `docs/CHAT-ANALYTICS.md`.
 
 ## Quick start
 
@@ -165,8 +167,8 @@ For the manual fallback, `docker compose` runs it on `localhost:8099`; see
 
 ## Deploy
 
-`.github/workflows/deploy.yml` builds three Docker images (api, worker,
-clips-fetcher), pushes to Docker Hub,
+`.github/workflows/deploy.yml` builds the Docker images (api, worker, realtime,
+mcp, clips-fetcher), pushes to Docker Hub,
 and deploys to a VPS via SSH + `docker compose`. The compose stack joins two
 shared external Docker networks:
 
@@ -215,7 +217,7 @@ push) returns to the pipeline-managed version.
 | `RABBITMQ_HOST` / `RABBITMQ_PORT` / `RABBITMQ_VHOST` / `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | broker (private vhost recommended) |
 | `SEED_SUPERADMIN_USERNAME` | Kick handle (lowercase) of the first super-admin. Used only on first deploy; ignored thereafter. |
 | `CLIPS_FETCHER_SECRET` | Shared secret between the API and the clips-fetcher sidecar (any random string). |
-| `ANALYTICS_API_KEY` | Optional. Enables API-key access to `/api/analytics/*` (used by the MCP server). Random, ≥ 24 chars. Empty = admin cookie only. |
+| `ANALYTICS_API_KEY` | Optional. Enables API-key access to `/api/analytics/*` and is the key for the `mcp` container at `/mcp`. Random, ≥ 24 chars. Empty = admin cookie only, and `/mcp` rejects everything. |
 
 ### Pre-deploy operator checklist
 

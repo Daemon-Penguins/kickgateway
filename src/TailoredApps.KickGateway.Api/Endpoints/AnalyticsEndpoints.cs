@@ -17,6 +17,7 @@ public static class AnalyticsEndpoints
     {
         var g = routes.MapGroup("/api/analytics")
             .RequireAuthorization(AnalyticsAuth.Policy)
+            .AddEndpointFilter<AnalyticsRequestFilter>()   // READ UNCOMMITTED + JSON 503/500
             .WithTags("Chat analytics");
 
         g.MapGet("/status", async (ClaimsPrincipal user, KickGatewayDbContext db, ChatAnalyticsService svc, CancellationToken ct) =>

@@ -28,6 +28,9 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
     // status / channels
     // =====================================================================================
 
+    /// <summary><see cref="ProjectionStatus.PendingInboxRows"/> stops counting here ("at least this many").</summary>
+    public const int PendingCountCap = 100_000;
+
     public async Task<AnalyticsStatus> StatusAsync(AnalyticsScope scope, CancellationToken ct)
     {
         var checkpoints = await db.AnalyticsCheckpoints.AsNoTracking().ToListAsync(ct);
@@ -36,15 +39,21 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
         var wt = webhook?.Position ?? DateTime.MinValue;
         var wk = webhook?.PositionKey ?? "";
         var types = ChatProjectionMapper.ProjectedEventTypes;
+        // Pending counts are capped: during a backfill there can be millions of rows behind the cursor and
+        // an exact count is not worth a scan of that size.
         var webhookPending = await db.ReceivedWebhooks.AsNoTracking()
-            .LongCountAsync(x => types.Contains(x.EventType)
-                                 && (x.ReceivedAt > wt || (x.ReceivedAt == wt && string.Compare(x.MessageId, wk) > 0)), ct);
+            .Where(x => types.Contains(x.EventType)
+                        && (x.ReceivedAt > wt || (x.ReceivedAt == wt && string.Compare(x.MessageId, wk) > 0)))
+            .Take(PendingCountCap)
+            .LongCountAsync(ct);
 
         var realtime = checkpoints.FirstOrDefault(c => c.Name == ChatProjector.RealtimeCheckpoint);
         var rt = realtime?.Position ?? DateTime.MinValue;
         var rk = realtime?.PositionKey ?? "";
         var realtimePending = await db.ReceivedRealtimeEvents.AsNoTracking()
-            .LongCountAsync(x => x.ReceivedAt > rt || (x.ReceivedAt == rt && string.Compare(x.DedupeKey, rk) > 0), ct);
+            .Where(x => x.ReceivedAt > rt || (x.ReceivedAt == rt && string.Compare(x.DedupeKey, rk) > 0))
+            .Take(PendingCountCap)
+            .LongCountAsync(ct);
 
         var messages = Messages(scope);
         return new AnalyticsStatus(

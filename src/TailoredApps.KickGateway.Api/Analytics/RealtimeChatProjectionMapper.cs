@@ -148,8 +148,9 @@ public static class RealtimeChatProjectionMapper
     private static ChatterEvent? MapSubscription(JsonElement p, ReceivedRealtimeEvent row, string slug)
     {
         var months = Int(p, "months");
+        // Receive time, not created_at: on subscription payloads that is the subscription's start date.
         var e = UserEvent(row, slug, months > 1 ? ChatterEventKind.SubscriptionRenewal : ChatterEventKind.SubscriptionNew, "",
-            Str(p, "user_id"), Str(p, "username"), Date(p, "created_at"));
+            Str(p, "user_id"), Str(p, "username"), null);
         if (e is null) return null;
         e.Amount = months;
         return e;
@@ -158,7 +159,7 @@ public static class RealtimeChatProjectionMapper
     private static IReadOnlyList<ChatterEvent> MapGifts(JsonElement p, ReceivedRealtimeEvent row, string slug)
     {
         var gifter = Str(p, "gifter_username");
-        var at = Date(p, "created_at");
+        DateTime? at = null; // receive time (see MapSubscription)
         var list = new List<ChatterEvent>();
         if (Arr(p, "gifted_usernames") is { } arr)
         {

@@ -21,6 +21,7 @@ env:
   WORKER_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-worker
   REALTIME_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-realtime
   CLIPS_FETCHER_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-clips-fetcher
+  MCP_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-mcp
 
 jobs:
   build-and-push:
@@ -76,6 +77,18 @@ jobs:
             ${{ env.REALTIME_IMAGE }}:${{ github.sha }}
           cache-from: type=gha,scope=realtime
           cache-to: type=gha,scope=realtime,mode=max
+
+      - name: Build & push MCP image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/TailoredApps.KickGateway.Mcp/Dockerfile
+          push: true
+          tags: |
+            ${{ env.MCP_IMAGE }}:latest
+            ${{ env.MCP_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha,scope=mcp
+          cache-to: type=gha,scope=mcp,mode=max
 
       - name: Build & push clips-fetcher image
         uses: docker/build-push-action@v6
@@ -195,6 +208,32 @@ jobs:
                 - default
                 - traefik-public
                 - db-internal
+
+            # Chat-analytics MCP server (Streamable HTTP) at https://${PUBLIC_HOST}/mcp. A thin adapter: it calls
+            # the api over the internal network with the analytics key, and clients authenticate with the same key.
+            mcp:
+              image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-mcp:${IMAGE_TAG:-latest}
+              restart: unless-stopped
+              depends_on:
+                - api
+              environment:
+                - ASPNETCORE_ENVIRONMENT=Production
+                - Mcp__Transport=http
+                - KickGateway__BaseUrl=http://api:8080
+                - KickGateway__ApiKey=${ANALYTICS_API_KEY:-}
+              networks:
+                - default
+                - traefik-public
+              labels:
+                - "traefik.enable=true"
+                - "traefik.http.routers.kickgateway-mcp.rule=Host(`${PUBLIC_HOST}`) && PathPrefix(`/mcp`)"
+                - "traefik.http.routers.kickgateway-mcp.priority=100"
+                - "traefik.http.routers.kickgateway-mcp.entrypoints=websecure"
+                - "traefik.http.routers.kickgateway-mcp.tls=true"
+                - "traefik.http.routers.kickgateway-mcp.tls.certresolver=letsencrypt-dns"
+                - "traefik.http.routers.kickgateway-mcp.tls.domains[0].main=${PUBLIC_HOST}"
+                - "traefik.http.services.kickgateway-mcp.loadbalancer.server.port=8080"
+                - "traefik.docker.network=traefik-public"
 
             clips-fetcher:
               image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-clips-fetcher:${IMAGE_TAG:-latest}

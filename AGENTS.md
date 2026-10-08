@@ -115,9 +115,13 @@ Status: actively developed.
   All Kick JSON knowledge stays in `ChatProjectionMapper` / `RealtimeChatProjectionMapper`;
   graph/profile logic is pure (`InteractionGraph`, `Louvain`, `ChatTextStats`).
   `/api/analytics/*` is read-only and scoped per client-app role; it also accepts
-  `Analytics:ApiKey` (Bearer / `X-Api-Key`) — and ONLY those endpoints do. The MCP
-  server (`TailoredApps.KickGateway.Mcp`) is a dumb stdio adapter over that REST API:
-  no DB access, no analysis of its own. See `docs/CHAT-ANALYTICS.md`.
+  `Analytics:ApiKey` (Bearer / `X-Api-Key`) — and ONLY those endpoints do. Their queries
+  run in a READ UNCOMMITTED transaction (`AnalyticsRequestFilter`) so analytics reads can
+  never block or deadlock the projector / ingest writers; transient DB errors → 503. The
+  MCP server (`TailoredApps.KickGateway.Mcp`) is a dumb adapter over that REST API — no
+  DB access, no analysis of its own — running either locally over stdio or deployed as the
+  `mcp` container (Streamable HTTP; Traefik routes `https://<host>/mcp` to it, clients use
+  the same analytics key, it calls the Api at `http://api:8080`). See `docs/CHAT-ANALYTICS.md`.
 - **DbContext lives in `TailoredApps.KickGateway.Data`.** `KickGatewayDbContext` +
   entities + migrations are a shared library referenced by both the Api and the
   Realtime listener (the Realtime service needs the roster + realtime inbox). The Api
@@ -147,7 +151,7 @@ TailoredApps.KickGateway.slnx
 │   ├── TailoredApps.KickGateway.Data/              # Shared EF DbContext + entities + migrations (Api + Realtime)
 │   ├── TailoredApps.KickGateway.Api/               # WebAPI + Blazor admin + webhook receiver + EF
 │   ├── TailoredApps.KickGateway.Realtime/          # Pusher realtime listener + live-video capture
-│   ├── TailoredApps.KickGateway.Mcp/               # MCP server (stdio) over /api/analytics — runs on the analyst's machine
+│   ├── TailoredApps.KickGateway.Mcp/               # MCP server over /api/analytics — `mcp` container (/mcp) or local stdio
 │   ├── TailoredApps.KickGateway.Worker/            # Sample subscriber (all channels, all event types)
 │   ├── TailoredApps.KickGateway.Subscribers.Loyalty/    # Sample: per-channel filtered subscriber
 │   ├── TailoredApps.KickGateway.Subscribers.Alerts/     # Sample: per-channel filtered subscriber
