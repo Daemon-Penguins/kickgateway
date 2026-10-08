@@ -17,6 +17,12 @@ public class KickGatewayDbContext : DbContext
     public DbSet<AdminUser> AdminUsers => Set<AdminUser>();
     public DbSet<AdminUserRole> AdminUserRoles => Set<AdminUserRole>();
 
+    // Chat-analytics read model (projected from ReceivedWebhooks + ReceivedRealtimeEvents by the Api).
+    public DbSet<ChatMessageRecord> ChatMessages => Set<ChatMessageRecord>();
+    public DbSet<ChatMention> ChatMentions => Set<ChatMention>();
+    public DbSet<ChatterEvent> ChatterEvents => Set<ChatterEvent>();
+    public DbSet<AnalyticsCheckpoint> AnalyticsCheckpoints => Set<AnalyticsCheckpoint>();
+
     // Deterministic Guids for the bootstrap SuperAdmin so the EF migration is
     // reproducible. The username on the seeded row is a placeholder
     // ("superadmin"); the real username is set at startup from the
@@ -146,6 +152,44 @@ public class KickGatewayDbContext : DbContext
                 GrantedAt = SeedTimestamp,
             });
         });
+
+        modelBuilder.Entity<ChatMessageRecord>(b =>
+        {
+            b.HasKey(x => x.MessageId);
+            // Channel windows (overview, graph, transcript).
+            b.HasIndex(x => new { x.ChannelSlug, x.CreatedAt });
+            // Per-chatter aggregates inside a channel (first seen, new vs returning).
+            b.HasIndex(x => new { x.ChannelSlug, x.SenderUserId, x.CreatedAt });
+            // Per-chatter profile across channels (+ "latest username of id" covered).
+            b.HasIndex(x => new { x.SenderUserId, x.CreatedAt }).IncludeProperties(x => x.SenderUsername);
+            // Replies received.
+            b.HasIndex(x => new { x.ReplyToUserId, x.CreatedAt });
+            b.HasIndex(x => x.ReplyToMessageId);
+            // Username → user id resolution + search (covered, latest-first per name).
+            b.HasIndex(x => new { x.SenderUsername, x.CreatedAt }).IncludeProperties(x => x.SenderUserId);
+            b.HasMany(x => x.Mentions)
+                .WithOne(x => x.Message)
+                .HasForeignKey(x => x.MessageId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ChatMention>(b =>
+        {
+            b.HasKey(x => new { x.MessageId, x.MentionedUsername });
+            b.HasIndex(x => x.MentionedUsername);
+        });
+
+        modelBuilder.Entity<ChatterEvent>(b =>
+        {
+            b.HasKey(x => x.Id);
+            b.HasIndex(x => new { x.UserId, x.OccurredAt });
+            b.HasIndex(x => new { x.CounterpartUserId, x.OccurredAt });
+            b.HasIndex(x => new { x.ChannelSlug, x.OccurredAt });
+            // "Was this message deleted?" lookups for transcripts.
+            b.HasIndex(x => x.RefId);
+        });
+
+        modelBuilder.Entity<AnalyticsCheckpoint>(b => b.HasKey(x => x.Name));
 
         // MassTransit transactional outbox + inbox tables — registered here so EF migrations create them.
         modelBuilder.AddInboxStateEntity();

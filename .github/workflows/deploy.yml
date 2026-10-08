@@ -141,6 +141,8 @@ jobs:
                 - Kick__ClipsFetcherUrl=http://clips-fetcher:8080
                 - Kick__ClipsFetcherSecret=${CLIPS_FETCHER_SECRET:-}
                 - Seed__SuperAdminUsername=${SEED_SUPERADMIN_USERNAME:-}
+                # Optional: API-key access to /api/analytics/* (MCP server). Empty = admin cookie only.
+                - Analytics__ApiKey=${ANALYTICS_API_KEY:-}
               networks:
                 - default
                 - traefik-public
@@ -220,6 +222,7 @@ jobs:
           SEED_SUPERADMIN_USERNAME=${{ secrets.SEED_SUPERADMIN_USERNAME }}
           PUBLIC_HOST=${{ secrets.PUBLIC_HOST }}
           CLIPS_FETCHER_SECRET=${{ secrets.CLIPS_FETCHER_SECRET }}
+          ANALYTICS_API_KEY=${{ secrets.ANALYTICS_API_KEY }}
           REALTIME_VIDEO_ENABLED=${{ vars.REALTIME_VIDEO_ENABLED }}
           ENVFILE"
 
