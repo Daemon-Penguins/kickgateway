@@ -146,6 +146,9 @@ public static partial class ChatProjectionMapper
     {
         var e = MapUserEvent(p, c, "subscriber", kind);
         if (e is null) return null;
+        // Subscription payloads' created_at is when the SUBSCRIPTION started (every monthly renewal repeats
+        // the original date), not when this event happened — the delivery time is the event time.
+        e.OccurredAt = c.Row.ReceivedAt;
         e.Amount = Int(p, "duration");
         e.ExpiresAt = Date(p, "expires_at");
         return e;
@@ -156,7 +159,7 @@ public static partial class ChatProjectionMapper
         var gifter = Obj(p, "gifter");
         var gifterId = Str(gifter, "user_id");
         var gifterName = Bool(gifter, "is_anonymous") ? "" : Str(gifter, "username");
-        var at = Date(p, "created_at");
+        DateTime? at = null; // delivery time — created_at belongs to the subscription, not the gift (see MapSub)
         var tier = Str(p, "tier");
         var giftees = Arr(p, "giftees") ?? Arr(p, "recipients");
 

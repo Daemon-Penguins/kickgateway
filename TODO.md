@@ -5,16 +5,16 @@ Details: `docs/CHAT-ANALYTICS.md`.
 
 ## Ship it
 
-- [ ] Commit the work on a feature branch and open a PR (right now it's uncommitted on `main`).
+- [x] Commit the work on a feature branch and open a PR (PR #11, merged and deployed).
 - [x] Add the `ANALYTICS_API_KEY` repo secret: a random value, at least 24 chars. `deploy.yml` already
       passes it to the Api as `Analytics__ApiKey`. If it's empty, only the admin cookie works.
 - [ ] Dev: `dotnet user-secrets set Analytics:ApiKey "<key>" --project src/TailoredApps.KickGateway.Api`.
-- [ ] Watch the first deploy:
-  - [ ] The `AddChatAnalytics` migration applies on Api start. It's additive only (4 new tables).
-  - [ ] The projector then backfills the **whole** inbox history, 500 rows per batch. Watch DB load. If it's too heavy,
+- [x] Watch the first deploy:
+  - [x] The `AddChatAnalytics` migration applies on Api start. It's additive only (4 new tables).
+  - [x] The projector then backfills the **whole** inbox history, 500 rows per batch. Watch DB load. If it's too heavy,
         pause it with `Analytics__Projection__Enabled=false`.
-  - [ ] The backfill is done when `GET /api/analytics/status` shows `pendingInboxRows = 0` for both sources.
-- [ ] Publish the MCP server (`dotnet publish src/TailoredApps.KickGateway.Mcp -c Release -o …`) and register it
+  - [x] The backfill is done when `GET /api/analytics/status` shows `pendingInboxRows = 0` for both sources.
+- [x] Publish the MCP server (`dotnet publish src/TailoredApps.KickGateway.Mcp -c Release -o …`) and register it
       in Claude Code / Claude Desktop. The commands are in `docs/CHAT-ANALYTICS.md`.
 
 ## Bug: `KickWebhookDispatcher` reads the wrong fields (found, not fixed)

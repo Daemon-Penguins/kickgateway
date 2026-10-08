@@ -6,9 +6,11 @@ profile), and what happens between two specific people. Two surfaces share one
 backend:
 
 - **REST**: `/api/analytics/*` on the Api. Accepts the admin cookie or an API key.
-- **MCP server**: `src/TailoredApps.KickGateway.Mcp`. A thin stdio adapter that
+- **MCP server**: `src/TailoredApps.KickGateway.Mcp`. A thin adapter that
   exposes each endpoint as an MCP tool, so Claude Code, Claude Desktop or any
-  other MCP client can explore the data conversationally.
+  other MCP client can explore the data conversationally. It is deployed as the
+  `mcp` container at `https://<host>/mcp` (Streamable HTTP) and can also run
+  locally over stdio.
 
 ## Data flow
 
@@ -37,6 +39,9 @@ ReceivedRealtimeEvents ────┘  (Api, background)     └─ ChatterEven
   username and an empty id, and profile queries match it by username.
 - All Kick JSON knowledge lives in `ChatProjectionMapper` (webhooks) and
   `RealtimeChatProjectionMapper` (Pusher).
+- Subscription and gifted-sub events are stamped with the inbox receive time.
+  The payload's `created_at` is the subscription's start date, repeated on
+  every monthly renewal.
 
 **Rebuild** (e.g. after a mapper fix): stop the Api, then
 `DELETE FROM ChatMentions; DELETE FROM ChatMessages; DELETE FROM ChatterEvents; DELETE FROM AnalyticsCheckpoints;`,
@@ -56,6 +61,22 @@ then start it again. The projector replays both inboxes.
 
 Prod: set the `ANALYTICS_API_KEY` repo secret (see README → Deploy). Dev: run
 `dotnet user-secrets set Analytics:ApiKey <random ≥24 chars> --project src/TailoredApps.KickGateway.Api`.
+
+## Reliability
+
+- Every `/api/analytics/*` request runs its queries in a `READ UNCOMMITTED`
+  transaction (`AnalyticsRequestFilter`). The data is a derived, read-only
+  aggregate, so dirty reads are harmless. Shared locks were not harmless:
+  during the initial backfill, analytics scans deadlocked with the
+  projector's inserts and were killed as victims (HTTP 500 after about 5 s).
+  Without shared locks, analytics reads can't block or deadlock the projector
+  or the webhook/realtime ingest.
+- Errors come back as JSON. A transient database error (deadlock, timeout,
+  lock timeout) returns `503` with `Retry-After`. Anything else returns `500`
+  with a `traceId`, which you can find in the Api log. The MCP server retries
+  once on any 5xx.
+- `status` counts pending inbox rows up to 100,000. A higher number means
+  "at least that many".
 
 ## Auth & scope
 
@@ -135,12 +156,30 @@ replied to.
 
 ## MCP server
 
-`TailoredApps.KickGateway.Mcp` is a stdio MCP server built on the official C#
-SDK (`ModelContextProtocol`). All of its tools are read-only:
+`TailoredApps.KickGateway.Mcp` is an MCP server built on the official C# SDK
+(`ModelContextProtocol`). All of its tools are read-only:
 
 `analytics_status`, `list_channels`, `channel_overview`, `list_chatters`,
 `interaction_graph`, `find_chatters`, `chatter_profile`,
 `chatter_relationship`, `search_messages`, `message_context`.
+
+### Remote: the deployed `mcp` container (no local install)
+
+`deploy.yml` runs it as the `mcp` service. Traefik routes
+`https://<host>/mcp` to it, it calls the Api over the internal network
+(`http://api:8080`), and clients authenticate with the same analytics key
+(`ANALYTICS_API_KEY`), sent as `Authorization: Bearer` or `X-Api-Key`. It
+fails closed: a missing or short key rejects every request.
+
+```bash
+claude mcp add --transport http kick-chat-analytics https://<host>/mcp \
+  --header "Authorization: Bearer <key>"
+```
+
+Claude Code stores the header in its config. Use a client-specific secret
+store if you'd rather not keep the key in plain text.
+
+### Local: stdio
 
 Configuration (environment variables, or user-secrets on the Mcp project):
 
@@ -149,6 +188,8 @@ Configuration (environment variables, or user-secrets on the Mcp project):
 | `KickGateway__BaseUrl` | Gateway root URL, e.g. `https://gateway.example.com` (default `http://localhost:5286`) |
 | `KickGateway__ApiKey` | Same value as the gateway's `Analytics__ApiKey` |
 | `KickGateway__TimeoutSeconds` | HTTP timeout (default 90) |
+| `Mcp__Transport` | `http` = Streamable HTTP at `/mcp` (what the container sets); default stdio. `--http` works too. |
+| `Mcp__ClientApiKey` | HTTP mode only: key clients must present. Defaults to `KickGateway__ApiKey`. |
 
 Build it once, since the MCP client launches the binary:
 

@@ -114,6 +114,7 @@ public class ChatProjectionMapperTests
         });
         Assert.Equal(new[] { "8", "9" }, events.Select(e => e.CounterpartUserId));
         Assert.Equal(new[] { "wh-1:gift:0", "wh-1:gift:1" }, events.Select(e => e.Id));
+        Assert.All(events, e => Assert.Equal(Received, e.OccurredAt));
     }
 
     [Fact]
@@ -182,10 +183,17 @@ public class ChatProjectionMapperTests
         Assert.Equal(ChatterEventKind.Follow, f.Kind);
         Assert.Equal("12", f.UserId);
 
-        const string sub = """{ "broadcaster": { "channel_slug": "chan" }, "subscriber": { "user_id": 13, "username": "Sub" }, "duration": 3 }""";
+        // created_at on subscription payloads is the subscription's start (repeated on every renewal) —
+        // the event time must be the delivery time instead.
+        const string sub = """
+        { "broadcaster": { "channel_slug": "chan" }, "subscriber": { "user_id": 13, "username": "Sub" }, "duration": 3,
+          "created_at": "2025-04-24T18:57:50Z", "expires_at": "2026-10-24T18:57:50Z" }
+        """;
         var s = Assert.Single(ChatProjectionMapper.Map(Row(KickEventTypes.SubscriptionRenewal, sub), null).Events);
         Assert.Equal(ChatterEventKind.SubscriptionRenewal, s.Kind);
         Assert.Equal(3, s.Amount);
+        Assert.Equal(Received, s.OccurredAt);
+        Assert.Equal(new DateTime(2026, 10, 24, 18, 57, 50, DateTimeKind.Utc), s.ExpiresAt);
     }
 
     [Theory]

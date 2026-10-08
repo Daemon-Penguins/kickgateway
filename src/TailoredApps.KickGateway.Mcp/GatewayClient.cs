@@ -28,46 +28,76 @@ public sealed class GatewayOptions
 /// </summary>
 public sealed class GatewayClient(HttpClient http, IOptions<GatewayOptions> options)
 {
+    /// <summary>Server-side failures are retried once — the gateway answers 503 for deadlocks/timeouts.</summary>
+    private const int MaxAttempts = 2;
+
     public async Task<string> GetAsync(string path, IReadOnlyDictionary<string, object?>? query, CancellationToken ct)
     {
         var key = options.Value.ApiKey?.Trim();
         if (string.IsNullOrEmpty(key))
             throw new McpException("The MCP server has no API key. Set KickGateway__ApiKey (same value as the gateway's Analytics__ApiKey).");
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, path + QueryString(query));
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        var url = path + QueryString(query);
+        for (var attempt = 1; ; attempt++)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-        HttpResponseMessage response;
+            HttpResponseMessage response;
+            try
+            {
+                response = await http.SendAsync(request, ct);
+            }
+            catch (HttpRequestException ex)
+            {
+                if (attempt < MaxAttempts) { await Task.Delay(RetryDelay, ct); continue; }
+                throw new McpException($"Could not reach the gateway at {http.BaseAddress}: {ex.Message}");
+            }
+            catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new McpException("The gateway did not answer in time — narrow the time window (from/to) or the channel.");
+            }
+
+            using (response)
+            {
+                var body = await response.Content.ReadAsStringAsync(ct);
+                if (response.IsSuccessStatusCode) return body;
+
+                var status = (int)response.StatusCode;
+                if (status >= 500 && attempt < MaxAttempts)
+                {
+                    await Task.Delay(response.Headers.RetryAfter?.Delta is { } d && d < TimeSpan.FromSeconds(10) ? d : RetryDelay, ct);
+                    continue;
+                }
+
+                throw new McpException(response.StatusCode switch
+                {
+                    HttpStatusCode.Unauthorized =>
+                        "The gateway rejected the API key (check KickGateway__ApiKey against the gateway's Analytics__ApiKey, min 24 chars).",
+                    HttpStatusCode.Forbidden => "The API key is not allowed to read this data.",
+                    _ when status is >= 300 and < 400 =>
+                        "The gateway redirected to its login page — the API key header was not accepted (is Analytics__ApiKey set on the gateway?).",
+                    HttpStatusCode.BadRequest or HttpStatusCode.NotFound => ErrorText(body) ?? $"Gateway returned {status}.",
+                    HttpStatusCode.ServiceUnavailable => $"The gateway is busy ({ErrorText(body) ?? "503"}) — try again shortly.",
+                    _ => $"Gateway returned {status}: {Truncate(ErrorText(body) ?? body, 300)}{TraceSuffix(body)}",
+                });
+            }
+        }
+    }
+
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(1.5);
+
+    private static string TraceSuffix(string body)
+    {
         try
         {
-            response = await http.SendAsync(request, ct);
+            using var doc = JsonDocument.Parse(body);
+            return doc.RootElement.TryGetProperty("traceId", out var t) && t.ValueKind == JsonValueKind.String ? $" (traceId {t.GetString()})" : "";
         }
-        catch (HttpRequestException ex)
+        catch (JsonException)
         {
-            throw new McpException($"Could not reach the gateway at {http.BaseAddress}: {ex.Message}");
-        }
-        catch (TaskCanceledException) when (!ct.IsCancellationRequested)
-        {
-            throw new McpException("The gateway did not answer in time — narrow the time window (from/to) or the channel.");
-        }
-
-        using (response)
-        {
-            var body = await response.Content.ReadAsStringAsync(ct);
-            if (response.IsSuccessStatusCode) return body;
-
-            var status = (int)response.StatusCode;
-            throw new McpException(response.StatusCode switch
-            {
-                HttpStatusCode.Unauthorized =>
-                    "The gateway rejected the API key (check KickGateway__ApiKey against the gateway's Analytics__ApiKey, min 24 chars).",
-                HttpStatusCode.Forbidden => "The API key is not allowed to read this data.",
-                _ when status is >= 300 and < 400 =>
-                    "The gateway redirected to its login page — the API key header was not accepted (is Analytics__ApiKey set on the gateway?).",
-                HttpStatusCode.BadRequest or HttpStatusCode.NotFound => ErrorText(body) ?? $"Gateway returned {status}.",
-                _ => $"Gateway returned {status}: {Truncate(ErrorText(body) ?? body, 300)}",
-            });
+            return "";
         }
     }
 
