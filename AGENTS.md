@@ -104,6 +104,20 @@ Status: actively developed.
   gate `KickBroadcasterAccount.VideoCaptureEnabled` **or** `RealtimeChannel.VideoCaptureEnabled`
   (both admin UI); global switch off by default. No ffmpeg — raw HLS passthrough;
   subscribers remux.
+- **Chat analytics is a derived read model, not a new ingest path.** The Api's
+  `ChatProjectionService` tails both inboxes (`ReceivedWebhooks.RawBody`,
+  `ReceivedRealtimeEvents.RawData`) with keyset checkpoints (`AnalyticsCheckpoints`)
+  into `ChatMessages` / `ChatMentions` / `ChatterEvents`; the ingest hot paths never
+  write them, and everything can be rebuilt by clearing those tables + checkpoints.
+  Chat from both transports merges on Kick's message id (plus a sender+content±5 s
+  guard); for channels with an enabled webhook broadcaster, webhooks are authoritative
+  for non-chat events and Pusher only adds realtime-only kinds (deletions, unbans).
+  All Kick JSON knowledge stays in `ChatProjectionMapper` / `RealtimeChatProjectionMapper`;
+  graph/profile logic is pure (`InteractionGraph`, `Louvain`, `ChatTextStats`).
+  `/api/analytics/*` is read-only and scoped per client-app role; it also accepts
+  `Analytics:ApiKey` (Bearer / `X-Api-Key`) — and ONLY those endpoints do. The MCP
+  server (`TailoredApps.KickGateway.Mcp`) is a dumb stdio adapter over that REST API:
+  no DB access, no analysis of its own. See `docs/CHAT-ANALYTICS.md`.
 - **DbContext lives in `TailoredApps.KickGateway.Data`.** `KickGatewayDbContext` +
   entities + migrations are a shared library referenced by both the Api and the
   Realtime listener (the Realtime service needs the roster + realtime inbox). The Api
@@ -119,6 +133,9 @@ Status: actively developed.
   RabbitMQ.
 - Unit tests live in `tests/TailoredApps.KickGateway.Tests` (e.g. clip JSON
   parsing, HLS manifest rewrite). Run with `dotnet test`.
+- `ChatAnalyticsIntegrationTests` start SQL Server via Testcontainers, apply the
+  real migrations, project a seeded inbox and exercise every analytics query. They
+  need Docker and are reported as skipped (`[SkippableFact]`) without it.
 
 ## Solution layout
 
@@ -130,6 +147,7 @@ TailoredApps.KickGateway.slnx
 │   ├── TailoredApps.KickGateway.Data/              # Shared EF DbContext + entities + migrations (Api + Realtime)
 │   ├── TailoredApps.KickGateway.Api/               # WebAPI + Blazor admin + webhook receiver + EF
 │   ├── TailoredApps.KickGateway.Realtime/          # Pusher realtime listener + live-video capture
+│   ├── TailoredApps.KickGateway.Mcp/               # MCP server (stdio) over /api/analytics — runs on the analyst's machine
 │   ├── TailoredApps.KickGateway.Worker/            # Sample subscriber (all channels, all event types)
 │   ├── TailoredApps.KickGateway.Subscribers.Loyalty/    # Sample: per-channel filtered subscriber
 │   ├── TailoredApps.KickGateway.Subscribers.Alerts/     # Sample: per-channel filtered subscriber
@@ -138,8 +156,9 @@ TailoredApps.KickGateway.slnx
 │   └── TailoredApps.KickGateway.ServiceDefaults/   # OTel/health/resilience shared
 ├── docker/docker-compose.yml                       # fallback dev infra without Aspire
 ├── docker/clips-fetcher/                           # browser-TLS fetch proxy (clips past Cloudflare)
-├── tests/TailoredApps.KickGateway.Tests/           # xUnit unit tests
-└── docs/CLIENT-INTEGRATION.md                      # how external clients subscribe
+├── tests/TailoredApps.KickGateway.Tests/           # xUnit unit tests (+ SQL Server testcontainer integration tests)
+├── docs/CLIENT-INTEGRATION.md                      # how external clients subscribe
+└── docs/CHAT-ANALYTICS.md                          # chat analytics REST API + MCP server
 ```
 
 ## Secrets and configuration
@@ -179,6 +198,9 @@ dotnet run --project src/TailoredApps.KickGateway.Worker
 
 # EF migrations (DbContext lives in the Data project; Api is the startup project)
 dotnet ef migrations add <Name> --project src/TailoredApps.KickGateway.Data --startup-project src/TailoredApps.KickGateway.Api --context KickGatewayDbContext --output-dir Migrations
+
+# MCP server for chat analytics (stdio; normally launched by the MCP client)
+dotnet run --project src/TailoredApps.KickGateway.Mcp   # needs KickGateway__BaseUrl + KickGateway__ApiKey
 
 # Whole solution
 dotnet build

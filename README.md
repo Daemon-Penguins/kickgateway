@@ -19,6 +19,7 @@ src/
   TailoredApps.KickGateway.Data/              # Shared EF Core DbContext + entities + migrations (Api + Realtime).
   TailoredApps.KickGateway.Api/               # WebAPI + Blazor admin + webhook receiver. Dockerfile here.
   TailoredApps.KickGateway.Realtime/          # Real-time Pusher listener + live-video capture. Dockerfile here.
+  TailoredApps.KickGateway.Mcp/               # MCP server (stdio) over the chat-analytics API — run locally, not deployed.
   TailoredApps.KickGateway.Worker/            # Sample subscriber, all channels (logs every contract). Dockerfile here.
   TailoredApps.KickGateway.Subscribers.*/     # Three sample apps demonstrating per-channel filtering.
   TailoredApps.KickGateway.AppHost/           # .NET Aspire orchestrator (F5 from VS).
@@ -26,6 +27,7 @@ src/
 docker/docker-compose.yml                     # RabbitMQ + SQL Server (dev fallback).
 docker/clips-fetcher/                         # Browser-TLS fetch proxy (reads clips past Cloudflare).
 docs/CLIENT-INTEGRATION.md                    # How to write a downstream subscriber.
+docs/CHAT-ANALYTICS.md                        # Chatter profiles + interaction graph (REST + MCP).
 .github/workflows/deploy.yml                  # Build → push Docker images → deploy via SSH.
 ```
 
@@ -64,6 +66,12 @@ docs/CLIENT-INTEGRATION.md                    # How to write a downstream subscr
   segments (`Contracts.Realtime.Media.LiveVideoSegment`) — published directly
   (bypassing the outbox) with a short TTL, so subscribers can store the video
   themselves. Off by default; heavy. Per-channel toggle in the admin UI.
+- **Chat analytics.** The Api projects both inboxes (`ReceivedWebhooks.RawBody`
+  + `ReceivedRealtimeEvents.RawData`) into a queryable read model (`ChatMessages`,
+  `ChatMentions`, `ChatterEvents`) and serves read-only chatter profiles, pair
+  dynamics and a who-talks-to-whom graph under `/api/analytics/*` (admin cookie or
+  `Analytics:ApiKey`). `TailoredApps.KickGateway.Mcp` exposes those as MCP tools
+  for Claude & co. See `docs/CHAT-ANALYTICS.md`.
 
 ## Quick start
 
@@ -207,6 +215,7 @@ push) returns to the pipeline-managed version.
 | `RABBITMQ_HOST` / `RABBITMQ_PORT` / `RABBITMQ_VHOST` / `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | broker (private vhost recommended) |
 | `SEED_SUPERADMIN_USERNAME` | Kick handle (lowercase) of the first super-admin. Used only on first deploy; ignored thereafter. |
 | `CLIPS_FETCHER_SECRET` | Shared secret between the API and the clips-fetcher sidecar (any random string). |
+| `ANALYTICS_API_KEY` | Optional. Enables API-key access to `/api/analytics/*` (used by the MCP server). Random, ≥ 24 chars. Empty = admin cookie only. |
 
 ### Pre-deploy operator checklist
 

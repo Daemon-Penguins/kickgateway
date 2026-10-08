@@ -5,6 +5,7 @@
     <Project Path="src/TailoredApps.KickGateway.AppHost/TailoredApps.KickGateway.AppHost.csproj" />
     <Project Path="src/TailoredApps.KickGateway.Contracts/TailoredApps.KickGateway.Contracts.csproj" />
     <Project Path="src/TailoredApps.KickGateway.Data/TailoredApps.KickGateway.Data.csproj" />
+    <Project Path="src/TailoredApps.KickGateway.Mcp/TailoredApps.KickGateway.Mcp.csproj" />
     <Project Path="src/TailoredApps.KickGateway.Realtime/TailoredApps.KickGateway.Realtime.csproj" />
     <Project Path="src/TailoredApps.KickGateway.ServiceDefaults/TailoredApps.KickGateway.ServiceDefaults.csproj" />
     <Project Path="src/TailoredApps.KickGateway.Worker/TailoredApps.KickGateway.Worker.csproj" />

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using TailoredApps.Integrations.Kick;
+using TailoredApps.KickGateway.Api.Analytics;
 using TailoredApps.KickGateway.Api.Auth;
 using TailoredApps.KickGateway.Api.Channels;
 using TailoredApps.KickGateway.Api.Components;
@@ -65,8 +66,11 @@ builder.Services.AddAuthentication(AdminClaims.AuthenticationScheme)
         o.SlidingExpiration = true;
         o.LoginPath = "/api/auth/admin/login";
         o.AccessDeniedPath = "/admin/forbidden";
-    });
-builder.Services.AddAuthorization(o => o.AddKickGatewayPolicies());
+    })
+    // /api/analytics/* also accepts a shared API key (for the MCP server). Only the analytics
+    // policy looks at it — every other endpoint still authenticates with the cookie alone.
+    .AddAnalyticsApiKey();
+builder.Services.AddAuthorization(o => o.AddKickGatewayPolicies().AddAnalyticsPolicy());
 
 // === Domain services ===
 builder.Services.AddScoped<PkceStateStore>();
@@ -74,6 +78,11 @@ builder.Services.AddScoped<BroadcasterTokenService>();
 builder.Services.AddScoped<SubscriptionEnrollmentService>();
 builder.Services.AddScoped<KickWebhookDispatcher>();
 builder.Services.AddHostedService<TokenRefreshBackgroundService>();
+
+// === Chat analytics (read model projected from the webhook + realtime inboxes) ===
+builder.Services.Configure<ChatAnalyticsOptions>(builder.Configuration.GetSection(ChatAnalyticsOptions.SectionName));
+builder.Services.AddScoped<ChatAnalyticsService>();
+builder.Services.AddHostedService<ChatProjectionService>();
 
 // === Live-feed tap services ===
 // Singleton in-memory ring buffer per client + a broadcaster→client resolver,
@@ -247,6 +256,9 @@ admin.MapBroadcasterEndpoints();
 admin.MapOAuthEndpoints();
 admin.MapSubscriptionEndpoints();
 admin.MapAdminUserEndpoints();   // per-route SuperAdminOnly policy inside
+
+// Chat analytics — own policy (admin cookie OR analytics API key), per-channel scoping inside.
+app.MapAnalyticsEndpoints();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode()
