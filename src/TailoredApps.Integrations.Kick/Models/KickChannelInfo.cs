@@ -6,6 +6,7 @@ namespace TailoredApps.Integrations.Kick.Models;
 /// read via the sidecar (see <see cref="Channels.IKickChannelClient"/>).
 /// <see cref="RawJson"/> is the full upstream payload for fields not surfaced here.
 /// </summary>
+/// <param name="LivestreamId">Kick's numeric id of the current broadcast (<c>livestream.id</c>); null when offline.</param>
 public record KickChannelInfo(
     string Slug,
     string ChannelId,
@@ -29,7 +30,8 @@ public record KickChannelInfo(
     bool IsMature,
     string? ThumbnailUrl,
     KickChannelCategory? Category,
-    string RawJson);
+    string RawJson,
+    string? LivestreamId = null);
 
 /// <summary>Category (game/section) a channel is streaming under.</summary>
 public record KickChannelCategory(string Id, string Name, string Slug, int Viewers);

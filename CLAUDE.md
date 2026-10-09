@@ -65,7 +65,12 @@ Status: actively developed.
   `kick.com/api/v2/channels/{slug}` (viewer count, live state, …) via the shared
   `IKickSidecarFetcher`. The `ChannelStatsConsumer` turns a `ChannelStatsRequested`
   message into a published `ChannelStats` (request/response also supported) — both
-  contracts live in `TailoredApps.KickGateway.Contracts.Channels`.
+  contracts live in `TailoredApps.KickGateway.Contracts.Channels`. A live snapshot also resolves the
+  broadcast's `LiveVodId`/`LiveVodUrl` via `IKickVideosClient.GetLiveVodIdAsync` (videos listing ->
+  `/api/v1/video/{uuid}` -> `livestream.vod_id`; cached per livestream id, 60 s negative cache, 10 s
+  budget so stats never hang on it). Watch URLs are built ONLY from `vod_id` (`KickWatchUrls.Vod`,
+  precomputed as `WatchUrl`/`LiveVodUrl`); the legacy `video.uuid` 404s - verified against kick.com's
+  own links on 2026-10-09.
 - **Real-time listener is a plain WebSocket, not a second bypass.** Kick's
   realtime chat/event stream is Pusher on `ws-us2.pusher.com` — a *separate origin
   with no Cloudflare*, reachable by a plain .NET `ClientWebSocket`. The

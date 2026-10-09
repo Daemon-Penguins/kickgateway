@@ -42,6 +42,10 @@ public record ChannelVideos
 /// Null when the gateway could not resolve it (no video yet, or the lookup failed);
 /// a link must not be built in that case.
 /// </param>
+/// <param name="WatchUrl">
+/// Ready-to-use watch URL, <c>https://kick.com/{slug}/videos/{VodId}</c>; null when <paramref name="VodId"/>
+/// is unknown. Use this instead of building URLs yourself - <paramref name="VideoUuid"/> in a URL 404s.
+/// </param>
 public record ChannelVideo(
     string LivestreamId,
     string VideoUuid,
@@ -50,4 +54,15 @@ public record ChannelVideo(
     long DurationMs,
     bool IsLive,
     int ViewerCount,
-    string? VodId = null);
+    string? VodId = null,
+    string? WatchUrl = null);
+
+/// <summary>The one place that knows how kick.com watch URLs look.</summary>
+public static class KickWatchUrls
+{
+    /// <summary><c>https://kick.com/{slug}/videos/{vodId}</c>, or null when there is no vod id to link to.</summary>
+    public static string? Vod(string slug, string? vodId) =>
+        string.IsNullOrWhiteSpace(vodId) || string.IsNullOrWhiteSpace(slug)
+            ? null
+            : $"https://kick.com/{slug.Trim().ToLowerInvariant()}/videos/{vodId.Trim()}";
+}

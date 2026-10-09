@@ -82,6 +82,48 @@ public class KickVideosClientTests
         Assert.Equal("uuid-aaa", videos[0].VideoUuid); // rest of the metadata survives
     }
 
+    /// <summary>
+    /// What a stats consumer needs when a channel goes live: the watch-URL id of the broadcast in
+    /// progress, found through the listing by livestream id and resolved like any other entry.
+    /// </summary>
+    [Fact]
+    public async Task Resolves_the_live_broadcast_vod_id_by_livestream_id_and_caches_it()
+    {
+        var fetcher = new StubFetcher(VideosJson());
+        var client = new KickVideosClient(fetcher, Opts(), NullLogger<KickVideosClient>.Instance);
+
+        Assert.Equal("019fb715-4f98-75ff-acf4-32d102f77b8c", await client.GetLiveVodIdAsync("xqc", "1000"));
+        Assert.Equal(1, fetcher.VideoLookups);
+
+        // Second call for the same broadcast: no listing, no lookup.
+        Assert.Equal("019fb715-4f98-75ff-acf4-32d102f77b8c", await client.GetLiveVodIdAsync("xqc", "1000"));
+        Assert.Equal(1, fetcher.VideoLookups);
+
+        // Unknown broadcast (e.g. Kick has not created the video entry yet) -> null, nothing resolved.
+        Assert.Null(await client.GetLiveVodIdAsync("xqc", "424242"));
+        Assert.Equal(1, fetcher.VideoLookups);
+    }
+
+    [Fact]
+    public async Task A_full_listing_warms_the_live_vod_cache()
+    {
+        var fetcher = new StubFetcher(VideosJson());
+        var client = new KickVideosClient(fetcher, Opts(), NullLogger<KickVideosClient>.Instance);
+
+        await client.GetVideosAsync("xqc");
+        var lookupsAfterListing = fetcher.VideoLookups;
+
+        Assert.Equal("019fb1dc-07d8-77fd-94c9-00c504d72bbc", await client.GetLiveVodIdAsync("xqc", "999"));
+        Assert.Equal(lookupsAfterListing, fetcher.VideoLookups);
+    }
+
+    [Fact]
+    public async Task Live_vod_id_is_null_when_the_per_video_lookup_fails()
+    {
+        var client = new KickVideosClient(new StubFetcher(VideosJson(), resolveVideos: false), Opts(), NullLogger<KickVideosClient>.Instance);
+        Assert.Null(await client.GetLiveVodIdAsync("xqc", "1000"));
+    }
+
     [Fact]
     public async Task Returns_empty_when_fetch_fails()
     {

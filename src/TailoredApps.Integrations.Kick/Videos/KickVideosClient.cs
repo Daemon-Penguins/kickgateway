@@ -34,6 +34,13 @@ public class KickVideosClient : IKickVideosClient
     /// </summary>
     private readonly ConcurrentDictionary<string, string> _vodIds = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary><c>livestream.id</c> -> vod_id, for <see cref="GetLiveVodIdAsync"/> (warmed by every full listing).</summary>
+    private readonly ConcurrentDictionary<string, string> _liveVodIds = new();
+
+    /// <summary>Recent failed live lookups: Kick creates the video entry a little after the stream starts, don't hammer the sidecar meanwhile.</summary>
+    private readonly ConcurrentDictionary<string, DateTime> _liveVodMisses = new();
+    private static readonly TimeSpan LiveVodMissTtl = TimeSpan.FromSeconds(60);
+
     public KickVideosClient(IKickSidecarFetcher fetcher, IOptions<KickGlobalDefaults> defaults, ILogger<KickVideosClient> log)
     {
         _fetcher = fetcher;
@@ -97,6 +104,10 @@ public class KickVideosClient : IKickVideosClient
                     : video with { VodId = await ResolveVodIdAsync(video.VideoUuid, token) };
             });
 
+        foreach (var v in resolved)
+            if (v.VodId is not null && !string.IsNullOrWhiteSpace(v.LivestreamId))
+                _liveVodIds[v.LivestreamId] = v.VodId;
+
         var missing = resolved.Count(v => v.VodId is null && !string.IsNullOrWhiteSpace(v.VideoUuid));
         if (missing > 0)
             _log.LogWarning("Could not resolve vod_id for {Missing}/{Total} video(s) — their deep links would 404",
@@ -139,6 +150,55 @@ public class KickVideosClient : IKickVideosClient
             _log.LogWarning(ex, "Failed to parse video {Uuid} while resolving its vod_id", legacyUuid);
             return null;
         }
+    }
+
+    public async Task<string?> GetLiveVodIdAsync(string slug, string livestreamId, CancellationToken ct = default)
+    {
+        slug = (slug ?? "").Trim().ToLowerInvariant();
+        livestreamId = (livestreamId ?? "").Trim();
+        if (slug.Length == 0 || livestreamId.Length == 0) return null;
+
+        if (_liveVodIds.TryGetValue(livestreamId, out var cached)) return cached;
+        if (_liveVodMisses.TryGetValue(livestreamId, out var missedAt) && DateTime.UtcNow - missedAt < LiveVodMissTtl) return null;
+
+        // One listing fetch to find the broadcast's legacy video uuid, then the (cached) per-video lookup.
+        string? uuid = null;
+        var json = await _fetcher.FetchAsync($"{WebApiBase}/api/v2/channels/{Uri.EscapeDataString(slug)}/videos", ct);
+        if (json is not null)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var el in doc.RootElement.EnumerateArray())
+                    {
+                        if (el.ValueKind != JsonValueKind.Object || el.ReadAsString("id") != livestreamId) continue;
+                        if (el.TryGetProperty("video", out var v) && v.ValueKind == JsonValueKind.Object)
+                            uuid = NullIfEmpty(v.ReadAsString("uuid"));
+                        break;
+                    }
+                }
+            }
+            catch (JsonException ex)
+            {
+                _log.LogWarning(ex, "Failed to parse videos for {Slug} while resolving the live vod_id", slug);
+            }
+        }
+
+        var vodId = uuid is null ? null : await ResolveVodIdAsync(uuid, ct);
+        if (vodId is null)
+        {
+            if (_liveVodMisses.Count >= MaxCachedVodIds) _liveVodMisses.Clear();
+            _liveVodMisses[livestreamId] = DateTime.UtcNow;
+            _log.LogDebug("Live vod_id for {Slug}/{LivestreamId} not available yet", slug, livestreamId);
+            return null;
+        }
+
+        if (_liveVodIds.Count >= MaxCachedVodIds) _liveVodIds.Clear();
+        _liveVodIds[livestreamId] = vodId;
+        _liveVodMisses.TryRemove(livestreamId, out _);
+        return vodId;
     }
 
     private static KickVideoInfo Parse(JsonElement el)

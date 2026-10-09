@@ -1,6 +1,7 @@
 using MassTransit;
 using TailoredApps.Integrations.Kick.Channels;
 using TailoredApps.Integrations.Kick.Models;
+using TailoredApps.Integrations.Kick.Videos;
 using TailoredApps.KickGateway.Contracts.Channels;
 
 namespace TailoredApps.KickGateway.Api.Channels;
@@ -16,12 +17,17 @@ namespace TailoredApps.KickGateway.Api.Channels;
 /// </summary>
 public class ChannelStatsConsumer : IConsumer<ChannelStatsRequested>
 {
+    /// <summary>Bounds the extra sidecar round trips for the live VOD id so a stats snapshot never hangs on them.</summary>
+    private static readonly TimeSpan LiveVodLookupTimeout = TimeSpan.FromSeconds(10);
+
     private readonly IKickChannelClient _channels;
+    private readonly IKickVideosClient _videos;
     private readonly ILogger<ChannelStatsConsumer> _log;
 
-    public ChannelStatsConsumer(IKickChannelClient channels, ILogger<ChannelStatsConsumer> log)
+    public ChannelStatsConsumer(IKickChannelClient channels, IKickVideosClient videos, ILogger<ChannelStatsConsumer> log)
     {
         _channels = channels;
+        _videos = videos;
         _log = log;
     }
 
@@ -56,6 +62,12 @@ public class ChannelStatsConsumer : IConsumer<ChannelStatsRequested>
 
         _log.LogInformation("Channel stats {Slug}: live={Live} viewers={Viewers}", slug, info.IsLive, info.ViewerCount);
 
+        // The VOD of the stream in progress: subscribers that react to "went live" want a link they can
+        // store right away, and the channel payload alone cannot provide it.
+        var liveVodId = info.IsLive && !string.IsNullOrEmpty(info.LivestreamId)
+            ? await ResolveLiveVodIdAsync(slug, info.LivestreamId, ct)
+            : null;
+
         return new ChannelStats
         {
             BroadcasterSlug = info.Slug,
@@ -81,11 +93,34 @@ public class ChannelStatsConsumer : IConsumer<ChannelStatsRequested>
             Language = info.Language,
             IsMature = info.IsMature,
             ThumbnailUrl = info.ThumbnailUrl,
+            LivestreamId = info.LivestreamId,
+            LiveVodId = liveVodId,
+            LiveVodUrl = KickWatchUrls.Vod(slug, liveVodId),
             Category = info.Category is null
                 ? null
                 : new ChannelStatsCategory(info.Category.Id, info.Category.Name, info.Category.Slug, info.Category.Viewers),
             RawPayload = info.RawJson,
         };
+    }
+
+    private async Task<string?> ResolveLiveVodIdAsync(string slug, string livestreamId, CancellationToken ct)
+    {
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(LiveVodLookupTimeout);
+            return await _videos.GetLiveVodIdAsync(slug, livestreamId, timeout.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _log.LogDebug("Live vod_id lookup for {Slug} timed out", slug);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "Live vod_id lookup for {Slug} failed", slug);
+            return null;
+        }
     }
 
     private static ChannelStats Failed(string slug, Guid? accountId, string error) => new()
