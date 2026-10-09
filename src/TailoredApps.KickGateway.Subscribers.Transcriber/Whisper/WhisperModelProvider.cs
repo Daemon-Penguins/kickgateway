@@ -43,7 +43,8 @@ public sealed class WhisperModelProvider
             // Backend/device enumeration is worth seeing once at Information; the per-call
             // "whisper_backend_init_gpu" chatter (a new whisper state per chunk) stays at Debug.
             var isBackendInfo = text.Contains("ggml_vulkan", StringComparison.OrdinalIgnoreCase) ||
-                                text.Contains("ggml_cuda", StringComparison.OrdinalIgnoreCase);
+                                text.Contains("ggml_cuda", StringComparison.OrdinalIgnoreCase) ||
+                                text.Contains("ggml_metal", StringComparison.OrdinalIgnoreCase);
             var mapped = level switch
             {
                 WhisperLogLevel.Error => LogLevel.Error,
