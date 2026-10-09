@@ -24,5 +24,6 @@
     <ProjectReference Include="..\..\src\TailoredApps.KickGateway.Realtime\TailoredApps.KickGateway.Realtime.csproj" />
     <ProjectReference Include="..\..\src\TailoredApps.Integrations.Kick\TailoredApps.Integrations.Kick.csproj" />
     <ProjectReference Include="..\..\src\TailoredApps.KickGateway.Subscribers.VideoRecorder\TailoredApps.KickGateway.Subscribers.VideoRecorder.csproj" />
+    <ProjectReference Include="..\..\src\TailoredApps.KickGateway.Subscribers.Transcriber\TailoredApps.KickGateway.Subscribers.Transcriber.csproj" />
   </ItemGroup>
 </Project>

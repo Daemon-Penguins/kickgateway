@@ -104,6 +104,47 @@ Status: actively developed.
   gate `KickBroadcasterAccount.VideoCaptureEnabled` **or** `RealtimeChannel.VideoCaptureEnabled`
   (both admin UI); global switch off by default. No ffmpeg — raw HLS passthrough;
   subscribers remux.
+- **Live transcription is a subscriber, not part of the listener.**
+  `TailoredApps.KickGateway.Subscribers.Transcriber` consumes `LiveVideoSegment` (throwaway
+  non-durable queue, one segment at a time per process for ordering), keeps **one long-lived
+  ffmpeg per channel** (`AudioDecoder`: segments → stdin, `-vn` → 16 kHz mono f32 PCM on
+  stdout; fMP4 init written first, re-emitted inits deduped, pre-init media buffered + replayed, new init / ffmpeg exit → restart
+  and re-sync the audio clock), cuts the PCM on the quietest 100 ms near `ChunkSeconds`
+  (`AudioChunker`), maps chunk positions back to stream time from the HLS segment timeline
+  (`SegmentTimeline`, ± one segment) and runs **one shared Whisper processor** (Whisper.net /
+  whisper.cpp, no cross-call context so channels never bleed; GPU via Vulkan/CUDA when the
+  runtime loads, CPU fallback; GGML model downloaded on first run into `Transcriber:ModelDir`).
+  Output: `Contracts.Realtime.Media.LiveTranscript` published **directly via `IBus`** (this
+  service has no DB → no outbox; no TTL) on its own slug-routed exchange
+  (`KickMediaTopology.BindLiveTranscript`) + per-channel daily `.txt`/`.jsonl` files. Silence
+  (RMS) is skipped before Whisper, hallucinations are dropped after (`TranscriptFilter`: blank,
+  sound tags, suppress phrases, repetition, confidence floor). Back-pressure = **drop oldest**
+  pending chunk (`MaxPendingChunks`) — stay live with gaps rather than fall behind. ffmpeg is a
+  hard requirement (fail fast at startup). Container detection must **sniff the bytes**
+  (`LiveVideoSegmentExtensions.DetectContainer`): Kick's playback CDN serves MPEG-TS as
+  `application/octet-stream` with `.ts?dna=...` URLs, so MIME and `EndsWith(".ts")` both lie
+  (that bug made the first prod run wait forever for an fMP4 init). Pure logic (chunker, timeline, filter) is unit-tested;
+  the ffmpeg/Whisper path is not. A GPU fault surfaces as `SEHException` from whisper.cpp and can
+  leave the next native call hung forever, so every Whisper call runs under a watchdog
+  (`Transcriber:InferenceTimeoutSeconds`) with escalating recovery: rebuild processor -> reload
+  model -> CPU backend -> stop the process (orchestrator restarts it). Never await a hung native
+  dispose without a timeout. Root cause found on the dev box (Intel Arc Pro B50, driver
+  32.0.101.8805): ggml-vulkan's KHR_coopmat shaders fault after 9-84 inferences; with them off
+  (`Transcriber:DisableVulkanCoopmat`, default true) 100+ chunks ran clean at ~45 % lower speed.
+  ggml reads that switch via the C runtime's `getenv`, so `NativeEnvironment.Set` pushes it through
+  `_putenv_s` (ucrtbase) before the native lib loads - `Environment.SetEnvironmentVariable` alone is
+  invisible to native code on Windows. Native whisper.cpp/ggml log lines are forwarded to ILogger
+  (`LogProvider`); the device list (`ggml_vulkan: N = ...`) is the first thing to check on a GPU
+  problem. Whisper.net creates a new whisper state per call (GPU buffers alloc/free each chunk) -
+  measured: no VRAM growth. `Transcriber:Uncensored` bans `*`-containing tokens via whisper.cpp
+  `suppress_regex` (Whisper learned subtitle-style `k***a` censoring); `Threads` auto = cores-2
+  clamped 4..16 (whisper.cpp's own default of 4 made the CPU fallback 3x slower than needed).
+  **Persistence lives in the Api**, not the transcriber: `LiveTranscriptConsumer` (shared durable
+  queue `kickgateway-live-transcripts`, binds every slug) stores each slice in `LiveTranscripts`
+  (`LiveTranscriptRecord`, migration `AddLiveTranscripts`), idempotent via `DedupeKey` =
+  slug|StartedAt ticks|AudioStartSeconds (checked, plus a unique index for the replica race).
+  Read via `/api/analytics/channels/{slug}/transcripts` (+ `/at`), same auth/scope/READ UNCOMMITTED
+  as the rest of analytics (`TranscriptQueries`). Not a derived read model: nothing to rebuild from.
 - **Chat analytics is a derived read model, not a new ingest path.** The Api's
   `ChatProjectionService` tails both inboxes (`ReceivedWebhooks.RawBody`,
   `ReceivedRealtimeEvents.RawData`) with keyset checkpoints (`AnalyticsCheckpoints`)
@@ -136,7 +177,7 @@ Status: actively developed.
 - MassTransit `ITestHarness` for verifying publish flow without standing up
   RabbitMQ.
 - Unit tests live in `tests/TailoredApps.KickGateway.Tests` (e.g. clip JSON
-  parsing, HLS manifest rewrite). Run with `dotnet test`.
+  parsing, HLS manifest rewrite, transcriber chunking/timeline/filter). Run with `dotnet test`.
 - `ChatAnalyticsIntegrationTests` start SQL Server via Testcontainers, apply the
   real migrations, project a seeded inbox and exercise every analytics query. They
   need Docker and are reported as skipped (`[SkippableFact]`) without it.
@@ -156,6 +197,8 @@ TailoredApps.KickGateway.slnx
 │   ├── TailoredApps.KickGateway.Subscribers.Loyalty/    # Sample: per-channel filtered subscriber
 │   ├── TailoredApps.KickGateway.Subscribers.Alerts/     # Sample: per-channel filtered subscriber
 │   ├── TailoredApps.KickGateway.Subscribers.Analytics/  # Sample: per-channel filtered subscriber (one consumer, many events)
+│   ├── TailoredApps.KickGateway.Subscribers.VideoRecorder/ # Sample: reassembles LiveVideoSegment into playable files
+│   ├── TailoredApps.KickGateway.Subscribers.Transcriber/   # Live speech-to-text: LiveVideoSegment → ffmpeg → Whisper → LiveTranscript (+ Dockerfile)
 │   ├── TailoredApps.KickGateway.AppHost/           # Aspire orchestrator (F5 entrypoint)
 │   └── TailoredApps.KickGateway.ServiceDefaults/   # OTel/health/resilience shared
 ├── docker/docker-compose.yml                       # fallback dev infra without Aspire

@@ -171,7 +171,9 @@ HLS stream and forwards the raw segments as
 `TailoredApps.KickGateway.Contracts.Realtime.Media.LiveVideoSegment` on its **own** exchange.
 Each message carries the segment bytes (`Data`), `MediaSequence`, `Duration`, `IsInitSegment`
 (the fMP4 init segment), `ContentType`, and `VariantBandwidth`. Reassemble in `MediaSequence`
-order (init segment first) and remux if you want a playable file.
+order (init segment first) and remux if you want a playable file. To tell TS from fMP4 use
+`seg.DetectContainer()` / `seg.IsTransportStream()` (sniffs the bytes) rather than `ContentType`
+or the URL extension: the CDN serves TS as `application/octet-stream` with a query-string URL.
 
 ```csharp
 using TailoredApps.KickGateway.Contracts.Realtime.Media;
@@ -189,6 +191,39 @@ cfg.ReceiveEndpoint("myapp-video-xqc", e =>
 > outbox) with a short broker TTL, so undelivered segments expire instead of piling up. If
 > your consumer is offline you miss that window — it's a live relay, not an archive. Use a
 > short-lived / auto-delete queue.
+
+### Live transcripts (speech-to-text of the live audio)
+
+When the `Subscribers.Transcriber` service is running, it turns the video firehose into text:
+one `TailoredApps.KickGateway.Contracts.Realtime.Media.LiveTranscript` per ~15 s of audio
+(chunks are cut on pauses), on its **own** topic exchange routed by `BroadcasterSlug`.
+
+| Field | Meaning |
+|---|---|
+| `Text` | the whole slice, Whisper segments joined with a space |
+| `Segments[]` | the individual Whisper segments (`StartedAt`, `EndedAt`, `Text`, `Confidence`) |
+| `StartedAt` / `EndedAt` | **estimated** UTC stream time (from segment duration + capture time, ± one HLS segment) |
+| `AudioStartSeconds` / `AudioSeconds` | position and length on the transcriber's per-channel audio clock (ordering / gap detection) |
+| `Language` | ISO-639-1 — configured, or detected when the transcriber runs in `auto` mode |
+| `Confidence` | average token probability 0..1 (0 = unknown) |
+| `FirstMediaSequence` / `LastMediaSequence` | the HLS segments that contributed |
+| `Model`, `TranscribedAt`, `ProcessingSeconds` | provenance + how far behind live the text runs |
+
+```csharp
+using TailoredApps.KickGateway.Contracts.Realtime.Media;
+
+KickMediaTopology.ConfigurePublishTopology(cfg);
+cfg.ReceiveEndpoint("myapp-transcripts-xqc", e =>
+{
+    KickMediaTopology.BindLiveTranscript(e, "xqc"); // no slugs → every channel
+    e.ConfigureConsumer<MyTranscriptConsumer>(ctx);
+});
+```
+
+> Transcripts are small and carry **no TTL**, so a normal durable queue is fine. They are still
+> best-effort: silence is never transcribed, Whisper's hallucinations (subtitle credits, repeated
+> tokens, sound tags) are filtered out, and when the transcriber can't keep up it drops the
+> *oldest* pending audio to stay live — expect gaps, not delays.
 
 ---
 

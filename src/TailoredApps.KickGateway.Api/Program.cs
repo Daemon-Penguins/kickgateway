@@ -15,6 +15,8 @@ using TailoredApps.KickGateway.Api.Webhooks;
 using TailoredApps.KickGateway.Contracts;
 using TailoredApps.KickGateway.Contracts.Channels;
 using TailoredApps.KickGateway.Contracts.Events;
+using TailoredApps.KickGateway.Api.Transcripts;
+using TailoredApps.KickGateway.Contracts.Realtime.Media;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -109,6 +111,7 @@ builder.Services.AddMassTransit(x =>
     x.AddConsumer<LiveFeedConsumer>();
     x.AddConsumer<ChannelStatsConsumer>();
     x.AddConsumer<ChannelVideosConsumer>();
+    x.AddConsumer<LiveTranscriptConsumer>();
 
     x.UsingRabbitMq((ctx, cfg) =>
     {
@@ -123,6 +126,11 @@ builder.Services.AddMassTransit(x =>
         // exchange with the broadcaster slug as the routing key. Subscribers
         // can then bind to "#" (everything) or a specific slug.
         KickEventTopology.ConfigurePublishTopology(cfg);
+
+        // Live-media family (LiveVideoSegment in, LiveTranscript out). The Api only consumes
+        // transcripts, but the publish topology must match the transcriber so the exchange
+        // is a slug-routed topic and BindLiveTranscript below binds to the right thing.
+        KickMediaTopology.ConfigurePublishTopology(cfg);
 
         // Live-feed queue: dedicated name + auto-delete + non-durable. Each API
         // replica gets its own queue (queue name suffixed with the host so two
@@ -167,6 +175,15 @@ builder.Services.AddMassTransit(x =>
         {
             KickEventTopology.BindKickEvent<ChannelVideosRequested>(e);
             e.ConfigureConsumer<ChannelVideosConsumer>(ctx);
+        });
+
+        // Live transcripts from Subscribers.Transcriber: a SHARED durable queue (competing
+        // consumers across replicas) bound to every channel. Each slice is stored once in
+        // LiveTranscripts; redeliveries are absorbed by the DedupeKey.
+        cfg.ReceiveEndpoint("kickgateway-live-transcripts", e =>
+        {
+            KickMediaTopology.BindLiveTranscript(e);
+            e.ConfigureConsumer<LiveTranscriptConsumer>(ctx);
         });
 
         // No ConfigureEndpoints — we've declared the only consumer explicitly,
