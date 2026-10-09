@@ -182,7 +182,7 @@ For the manual fallback, `docker compose` runs it on `localhost:8099`; see
 ## Deploy
 
 `.github/workflows/deploy.yml` builds the Docker images (api, worker, realtime,
-mcp, clips-fetcher), pushes to Docker Hub,
+mcp, transcriber, clips-fetcher), pushes to Docker Hub,
 and deploys to a VPS via SSH + `docker compose`. The compose stack joins two
 shared external Docker networks:
 
@@ -217,7 +217,12 @@ push) returns to the pipeline-managed version.
 | Variable | What |
 | --- | --- |
 | `DOCKERHUB_NAMESPACE` | Docker Hub user/org under which images are pushed (e.g. `myorg`) |
-| `REALTIME_VIDEO_ENABLED` | Optional. `true` turns on the realtime listener's live-video capture (heavy). Defaults to `false`. |
+| `REALTIME_VIDEO_ENABLED` | Optional. `true` turns on the realtime listener's live-video capture (heavy). Defaults to `false`. The `transcriber` container only has work while this is on. |
+| `TRANSCRIBER_MODEL` | Optional. Whisper GGML model for the CPU-only `transcriber` container: `Small` (default), `Base`, `Medium`, `LargeV3Turbo` (needs a strong CPU; ~6x the cost of `Small`). |
+| `TRANSCRIBER_QUANTIZATION` | Optional. `Q5_0` (default), `Q8_0` or `NoQuantization`. |
+| `TRANSCRIBER_LANGUAGE` | Optional. Whisper language code, default `pl`; `auto` detects per chunk. |
+| `TRANSCRIBER_THREADS` | Optional. Whisper CPU threads, default `0` = auto (cores minus 2, clamped 4..16). |
+| `TRANSCRIBER_WRITE_FILES` | Optional. `true` also appends per-channel `.txt`/`.jsonl` files into the `transcriber-transcripts` volume. Default `false` - the api's `LiveTranscripts` table is the record. |
 
 **Secrets** (Settings → Secrets and variables → Actions → Secrets):
 
@@ -334,7 +339,8 @@ dotnet run --project src/TailoredApps.KickGateway.Subscribers.Transcriber
 # e.g. Transcriber__Channels__0=xqc Transcriber__Language=en Transcriber__Model=Small Transcriber__UseGpu=false
 ```
 
-As a container (CPU only, pick a model the host keeps up with):
+On the VPS `deploy.yml` runs it as the `transcriber` compose service (CPU only, model via
+`TRANSCRIBER_MODEL`, GGML cached in the `transcriber-models` volume). By hand:
 
 ```sh
 docker build -f src/TailoredApps.KickGateway.Subscribers.Transcriber/Dockerfile -t kickgateway-transcriber .

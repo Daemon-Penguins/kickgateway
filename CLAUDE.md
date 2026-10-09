@@ -145,6 +145,10 @@ Status: actively developed.
   slug|StartedAt ticks|AudioStartSeconds (checked, plus a unique index for the replica race).
   Read via `/api/analytics/channels/{slug}/transcripts` (+ `/at`), same auth/scope/READ UNCOMMITTED
   as the rest of analytics (`TranscriptQueries`). Not a derived read model: nothing to rebuild from.
+  **Deployed CPU-only** by `deploy.yml` as the `transcriber` compose service (no GPU on the VPS):
+  model via `TRANSCRIBER_MODEL` (default `Small` - LargeV3Turbo on a VPS CPU cannot keep up), GGML
+  cached in the `transcriber-models` volume, `cpu_shares: 512` so Whisper yields to the api, files
+  off by default (`TRANSCRIBER_WRITE_FILES`). It has nothing to do unless `REALTIME_VIDEO_ENABLED=true`.
 - **Chat analytics is a derived read model, not a new ingest path.** The Api's
   `ChatProjectionService` tails both inboxes (`ReceivedWebhooks.RawBody`,
   `ReceivedRealtimeEvents.RawData`) with keyset checkpoints (`AnalyticsCheckpoints`)
