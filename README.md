@@ -218,6 +218,7 @@ push) returns to the pipeline-managed version.
 | --- | --- |
 | `DOCKERHUB_NAMESPACE` | Docker Hub user/org under which images are pushed (e.g. `myorg`) |
 | `REALTIME_VIDEO_ENABLED` | Optional. `true` turns on the realtime listener's live-video capture (heavy). Defaults to `false`. The `transcriber` container only has work while this is on. |
+| `TRANSCRIBER_ENABLED` | Optional. `true` runs the CPU-only `transcriber` container on the VPS (compose profile). Default off: run exactly **one** transcriber per channel - two producers store every sentence twice. |
 | `TRANSCRIBER_MODEL` | Optional. Whisper GGML model for the CPU-only `transcriber` container: `LargeV3Turbo` (default, best quality, needs a strong CPU), `Medium`, `Small` (~6x cheaper), `Base`. Watch the logs for `slower than real time` / dropped chunks. |
 | `TRANSCRIBER_QUANTIZATION` | Optional. `Q5_0` (default), `Q8_0` or `NoQuantization`. |
 | `TRANSCRIBER_LANGUAGE` | Optional. Whisper language code, default `pl`; `auto` detects per chunk. |
@@ -339,8 +340,11 @@ dotnet run --project src/TailoredApps.KickGateway.Subscribers.Transcriber
 # e.g. Transcriber__Channels__0=xqc Transcriber__Language=en Transcriber__Model=Small Transcriber__UseGpu=false
 ```
 
-On the VPS `deploy.yml` runs it as the `transcriber` compose service (CPU only, model via
-`TRANSCRIBER_MODEL`, GGML cached in the `transcriber-models` volume). By hand:
+On the VPS `deploy.yml` can run it as the `transcriber` compose service (opt-in via the
+`TRANSCRIBER_ENABLED` repo variable; CPU only, model via `TRANSCRIBER_MODEL`, GGML cached
+in the `transcriber-models` volume). Measured there: `LargeV3Turbo` on the VPS CPU ran at
+~0.5x real time and dropped most chunks, so prefer a GPU host (below) and leave the VPS one
+off, or use `Small`. By hand:
 
 ```sh
 docker build -f src/TailoredApps.KickGateway.Subscribers.Transcriber/Dockerfile -t kickgateway-transcriber .
@@ -348,6 +352,24 @@ docker run -d --name transcriber -v whisper-models:/models -v transcripts:/trans
   -e RabbitMq__Host=rabbitmq -e RabbitMq__Username=... -e RabbitMq__Password=... \
   -e Transcriber__Model=Small -e Transcriber__Language=pl kickgateway-transcriber
 ```
+
+**On a Mac (Apple Silicon)** Whisper runs on the GPU through Metal out of the box - a Mac mini M2
+handles `LargeV3Turbo` several times faster than real time, which makes it a good permanent home
+for the transcriber (the broker is the integration point, so it can run anywhere that reaches it).
+`deploy/macos/install-transcriber.sh` publishes the app and installs it as a launchd user agent
+(starts at login, restarts on failure, logs to `~/Library/Logs/kickgateway/transcriber.log`):
+
+```sh
+brew install ffmpeg && brew install --cask dotnet-sdk
+mkdir -p ~/.config/kickgateway && cp deploy/macos/transcriber.env.example ~/.config/kickgateway/transcriber.env
+$EDITOR ~/.config/kickgateway/transcriber.env      # RabbitMq__*, model, language, optional channel list
+deploy/macos/install-transcriber.sh                # re-run after git pull to update
+tail -f ~/Library/Logs/kickgateway/transcriber.log
+```
+
+A user agent needs a logged-in session: on a headless Mac mini turn on automatic login and keep it
+awake (`sudo pmset -a sleep 0 disksleep 0`). Keep `TRANSCRIBER_ENABLED` off on the VPS while the Mac
+runs - one transcriber per channel.
 
 ### On-demand channel stats
 
