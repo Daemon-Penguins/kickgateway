@@ -248,7 +248,7 @@ jobs:
                 - "traefik.http.services.kickgateway-mcp.loadbalancer.server.port=8080"
                 - "traefik.docker.network=traefik-public"
 
-            # Live speech-to-text, CPU only (no GPU on the VPS). Consumes LiveVideoSegment - so it only
+            # Live speech-to-text, CPU only (no GPU on the VPS), OPT-IN. Consumes LiveVideoSegment - so it only
             # works while REALTIME_VIDEO_ENABLED=true and a channel is live - and publishes LiveTranscript,
             # which the api stores in LiveTranscripts. Default model LargeV3Turbo (best Polish quality; the
             # VPS has plenty of cores) - if the logs show 'slower than real time' / dropped chunks, set
@@ -256,6 +256,10 @@ jobs:
             # first start into the models volume. cpu_shares keeps Whisper below the api under contention.
             transcriber:
               image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-transcriber:${IMAGE_TAG:-latest}
+              # Opt-in via the TRANSCRIBER_ENABLED repo variable (-> COMPOSE_PROFILES in .env). Off by
+              # default: run exactly ONE transcriber per channel (e.g. on a GPU box publishing to this
+              # broker) - two producers would store every sentence twice (DedupeKey is per process).
+              profiles: ["transcriber"]
               restart: unless-stopped
               depends_on:
                 - api
@@ -313,6 +317,7 @@ jobs:
           CLIPS_FETCHER_SECRET=${{ secrets.CLIPS_FETCHER_SECRET }}
           ANALYTICS_API_KEY=${{ secrets.ANALYTICS_API_KEY }}
           REALTIME_VIDEO_ENABLED=${{ vars.REALTIME_VIDEO_ENABLED }}
+          COMPOSE_PROFILES=${{ vars.TRANSCRIBER_ENABLED == 'true' && 'transcriber' || '' }}
           TRANSCRIBER_MODEL=${{ vars.TRANSCRIBER_MODEL }}
           TRANSCRIBER_QUANTIZATION=${{ vars.TRANSCRIBER_QUANTIZATION }}
           TRANSCRIBER_LANGUAGE=${{ vars.TRANSCRIBER_LANGUAGE }}
@@ -329,6 +334,12 @@ jobs:
 
           # Pull and deploy
           $SSH_CMD "cd /opt/apps/kickgateway && docker compose pull && docker compose up -d --remove-orphans"
+
+          # `up` ignores services of inactive profiles even if their container is running, so turn the
+          # transcriber off explicitly when TRANSCRIBER_ENABLED is not 'true'.
+          if [ "${{ vars.TRANSCRIBER_ENABLED }}" != "true" ]; then
+            $SSH_CMD "cd /opt/apps/kickgateway && docker compose --profile transcriber rm -s -f transcriber >/dev/null 2>&1 || true"
+          fi
 
           # Verify
           $SSH_CMD "cd /opt/apps/kickgateway && docker compose ps"
@@ -348,7 +359,7 @@ jobs:
           if [ -n "$UNHEALTHY" ]; then
             echo "❌ Unhealthy containers found:"
             echo "$UNHEALTHY"
-            $SSH_CMD "cd /opt/apps/kickgateway && docker compose logs --tail 30 api worker transcriber"
+            $SSH_CMD "cd /opt/apps/kickgateway && docker compose --profile transcriber logs --tail 30 api worker transcriber 2>/dev/null || docker compose logs --tail 30 api worker"
             exit 1
           fi
 

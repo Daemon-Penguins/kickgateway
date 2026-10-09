@@ -145,11 +145,16 @@ Status: actively developed.
   slug|StartedAt ticks|AudioStartSeconds (checked, plus a unique index for the replica race).
   Read via `/api/analytics/channels/{slug}/transcripts` (+ `/at`), same auth/scope/READ UNCOMMITTED
   as the rest of analytics (`TranscriptQueries`). Not a derived read model: nothing to rebuild from.
-  **Deployed CPU-only** by `deploy.yml` as the `transcriber` compose service (no GPU on the VPS):
-  model via `TRANSCRIBER_MODEL` (default `LargeV3Turbo`; drop to `Small` if the logs report
-  'slower than real time' / dropped chunks - ~6x cheaper, much worse Polish), GGML
-  cached in the `transcriber-models` volume, `cpu_shares: 512` so Whisper yields to the api, files
-  off by default (`TRANSCRIBER_WRITE_FILES`). It has nothing to do unless `REALTIME_VIDEO_ENABLED=true`.
+  **VPS deploy is opt-in and CPU-only**: `deploy.yml` ships the `transcriber` compose service behind
+  the `transcriber` compose profile (`TRANSCRIBER_ENABLED=true` -> `COMPOSE_PROFILES` in `.env`;
+  the deploy step also stops/removes the container when off, because `compose up` ignores
+  disabled-profile containers that are still running). Measured on the VPS: `LargeV3Turbo` at
+  ~0.5x real time -> most chunks dropped, so the intended production host is a GPU box (e.g. a
+  Mac mini M2 via Metal - `deploy/macos/install-transcriber.sh` installs a launchd user agent;
+  Whisper.net's base runtime is Metal-enabled on osx-arm64, no code changes). **Exactly one
+  transcriber per channel**: `DedupeKey` is built from the per-process audio clock, so two
+  producers store every sentence twice. Model via `TRANSCRIBER_MODEL` (default `LargeV3Turbo`),
+  GGML cached in the `transcriber-models` volume, `cpu_shares: 512`, files off by default.
 - **Chat analytics is a derived read model, not a new ingest path.** The Api's
   `ChatProjectionService` tails both inboxes (`ReceivedWebhooks.RawBody`,
   `ReceivedRealtimeEvents.RawData`) with keyset checkpoints (`AnalyticsCheckpoints`)
@@ -208,6 +213,7 @@ TailoredApps.KickGateway.slnx
 │   └── TailoredApps.KickGateway.ServiceDefaults/   # OTel/health/resilience shared
 ├── docker/docker-compose.yml                       # fallback dev infra without Aspire
 ├── docker/clips-fetcher/                           # browser-TLS fetch proxy (clips past Cloudflare)
+├── deploy/macos/                                   # launchd installer + env template for running the transcriber on a Mac (Metal)
 ├── tests/TailoredApps.KickGateway.Tests/           # xUnit unit tests (+ SQL Server testcontainer integration tests)
 ├── docs/CLIENT-INTEGRATION.md                      # how external clients subscribe
 └── docs/CHAT-ANALYTICS.md                          # chat analytics REST API + MCP server
