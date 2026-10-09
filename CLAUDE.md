@@ -146,7 +146,8 @@ Status: actively developed.
   Read via `/api/analytics/channels/{slug}/transcripts` (+ `/at`), same auth/scope/READ UNCOMMITTED
   as the rest of analytics (`TranscriptQueries`). Not a derived read model: nothing to rebuild from.
   **Deployed CPU-only** by `deploy.yml` as the `transcriber` compose service (no GPU on the VPS):
-  model via `TRANSCRIBER_MODEL` (default `Small` - LargeV3Turbo on a VPS CPU cannot keep up), GGML
+  model via `TRANSCRIBER_MODEL` (default `LargeV3Turbo`; drop to `Small` if the logs report
+  'slower than real time' / dropped chunks - ~6x cheaper, much worse Polish), GGML
   cached in the `transcriber-models` volume, `cpu_shares: 512` so Whisper yields to the api, files
   off by default (`TRANSCRIBER_WRITE_FILES`). It has nothing to do unless `REALTIME_VIDEO_ENABLED=true`.
 - **Chat analytics is a derived read model, not a new ingest path.** The Api's
