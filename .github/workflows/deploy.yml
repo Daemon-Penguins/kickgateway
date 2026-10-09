@@ -250,8 +250,9 @@ jobs:
 
             # Live speech-to-text, CPU only (no GPU on the VPS). Consumes LiveVideoSegment - so it only
             # works while REALTIME_VIDEO_ENABLED=true and a channel is live - and publishes LiveTranscript,
-            # which the api stores in LiveTranscripts. Pick a model the host keeps up with: Small (default)
-            # is ~6x faster than LargeV3Turbo on CPU. The GGML model is downloaded from Hugging Face on
+            # which the api stores in LiveTranscripts. Default model LargeV3Turbo (best Polish quality; the
+            # VPS has plenty of cores) - if the logs show 'slower than real time' / dropped chunks, set
+            # TRANSCRIBER_MODEL=Small (~6x cheaper). The GGML model is downloaded from Hugging Face on
             # first start into the models volume. cpu_shares keeps Whisper below the api under contention.
             transcriber:
               image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-transcriber:${IMAGE_TAG:-latest}
@@ -267,7 +268,7 @@ jobs:
                 - RabbitMq__Username=${RABBITMQ_USERNAME:-}
                 - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
                 - Transcriber__UseGpu=false
-                - Transcriber__Model=${TRANSCRIBER_MODEL:-Small}
+                - Transcriber__Model=${TRANSCRIBER_MODEL:-LargeV3Turbo}
                 - Transcriber__Quantization=${TRANSCRIBER_QUANTIZATION:-Q5_0}
                 - Transcriber__Language=${TRANSCRIBER_LANGUAGE:-pl}
                 - Transcriber__Threads=${TRANSCRIBER_THREADS:-0}
