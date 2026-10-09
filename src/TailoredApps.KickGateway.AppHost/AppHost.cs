@@ -120,4 +120,21 @@ builder.AddProject<Projects.TailoredApps_KickGateway_Subscribers_VideoRecorder>(
     .WithEnvironment("RabbitMq__Username", rabbit.Resource.UserNameParameter!)
     .WithEnvironment("RabbitMq__Password", rabbit.Resource.PasswordParameter);
 
+// Live-stream transcriber: consumes LiveVideoSegment, pulls the audio track out with ffmpeg and runs
+// it through Whisper (GPU via Vulkan/CUDA when present, else CPU), publishing LiveTranscript + writing
+// per-channel .txt/.jsonl files. Needs `ffmpeg` on PATH (or Transcriber__FfmpegPath) and downloads the
+// GGML model (~550 MB for large-v3-turbo q5_0) on first run. Set TRANSCRIBER_ENABLED=false to skip it.
+var transcriberEnabled = !string.Equals(
+    builder.Configuration["TRANSCRIBER_ENABLED"], "false", StringComparison.OrdinalIgnoreCase);
+if (transcriberEnabled)
+{
+    builder.AddProject<Projects.TailoredApps_KickGateway_Subscribers_Transcriber>("transcriber")
+        .WithReference(rabbit)
+        .WaitFor(rabbit)
+        .WithEnvironment("RabbitMq__Host", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Host))
+        .WithEnvironment("RabbitMq__Port", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Port))
+        .WithEnvironment("RabbitMq__Username", rabbit.Resource.UserNameParameter!)
+        .WithEnvironment("RabbitMq__Password", rabbit.Resource.PasswordParameter);
+}
+
 builder.Build().Run();

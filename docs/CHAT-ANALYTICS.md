@@ -154,6 +154,28 @@ latency and last interaction. Also returned: a `balance` label (`mutual` or
 between the two, and the latest 40 direct exchanges, each with the message it
 replied to.
 
+### Live transcripts (speech-to-text)
+
+When `Subscribers.Transcriber` is running, the Api stores every `LiveTranscript` it publishes in
+the `LiveTranscripts` table (consumer `LiveTranscriptConsumer`, shared durable queue
+`kickgateway-live-transcripts`, one row per ~10-30 s slice, redeliveries deduplicated by
+`DedupeKey`). This is a separate best-effort pipeline, not derived from the inboxes: a lost
+message is a gap, and there is nothing to rebuild from.
+
+| Endpoint | Returns |
+|---|---|
+| `GET /channels/{slug}/transcripts?from&to&q&cursor&limit` | slices overlapping the window, oldest first; `q` = substring match on the text; keyset `cursor` (max `limit` 500) |
+| `GET /channels/{slug}/transcripts/at?at=<ISO-8601>&tolerance=20` | what was being said at that moment (+/- tolerance seconds), e.g. pass a chat message's `createdAt` |
+
+Each item carries `startedAt`/`endedAt` (estimated UTC stream time, +/- one HLS segment),
+`audioStartSeconds` (the transcriber's per-channel audio clock, for ordering/gap detection), the
+`text`, per-segment `segments[]` with their own times, `confidence`, `firstMediaSequence`/
+`lastMediaSequence` (HLS provenance), `model`, `transcribedAt` and `processingSeconds`.
+
+Chronology with chat: everything is UTC on the gateway's clock, so `startedAt`/`endedAt` sort
+together with `ChatMessages.CreatedAt` and the inboxes' `ReceivedAt`. Expect chat *reactions* to
+a sentence ~10-20 s after its `endedAt` (encoder/HLS latency plus the viewers' player delay).
+
 ## MCP server
 
 `TailoredApps.KickGateway.Mcp` is an MCP server built on the official C# SDK

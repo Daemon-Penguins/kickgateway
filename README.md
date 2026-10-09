@@ -21,7 +21,8 @@ src/
   TailoredApps.KickGateway.Realtime/          # Real-time Pusher listener + live-video capture. Dockerfile here.
   TailoredApps.KickGateway.Mcp/               # MCP server over the chat-analytics API — `mcp` container (/mcp) or local stdio. Dockerfile here.
   TailoredApps.KickGateway.Worker/            # Sample subscriber, all channels (logs every contract). Dockerfile here.
-  TailoredApps.KickGateway.Subscribers.*/     # Three sample apps demonstrating per-channel filtering.
+  TailoredApps.KickGateway.Subscribers.*/     # Sample apps demonstrating per-channel filtering (+ VideoRecorder).
+  TailoredApps.KickGateway.Subscribers.Transcriber/ # Live-stream speech-to-text (ffmpeg + Whisper) -> LiveTranscript. Dockerfile here.
   TailoredApps.KickGateway.AppHost/           # .NET Aspire orchestrator (F5 from VS).
   TailoredApps.KickGateway.ServiceDefaults/   # OTel + health + resilience.
 docker/docker-compose.yml                     # RabbitMQ + SQL Server (dev fallback).
@@ -66,6 +67,19 @@ docs/CHAT-ANALYTICS.md                        # Chatter profiles + interaction g
   segments (`Contracts.Realtime.Media.LiveVideoSegment`) — published directly
   (bypassing the outbox) with a short TTL, so subscribers can store the video
   themselves. Off by default; heavy. Per-channel toggle in the admin UI.
+- **Live transcription.** `Subscribers.Transcriber` consumes that video firehose,
+  pulls the audio track out with a long-lived ffmpeg per channel (16 kHz mono PCM,
+  no video decoding), cuts it on pauses into ~15 s chunks and runs them through
+  Whisper (whisper.cpp via Whisper.net — GPU through Vulkan/CUDA when present, CPU
+  otherwise; model downloaded on first run). Each chunk is published as
+  `Contracts.Realtime.Media.LiveTranscript` on its own slug-routed exchange and
+  appended to per-channel daily `.txt`/`.jsonl` files. Needs `ffmpeg` on PATH;
+  when Whisper can't keep up it drops the oldest pending audio to stay live. GPU
+  faults are survived (watchdog + processor/model rebuild + CPU fallback); on Intel
+  Arc the Vulkan cooperative-matrix shaders are disabled by default because they
+  crash after a few minutes (`Transcriber:DisableVulkanCoopmat`). Profanity is
+  transcribed verbatim (`Transcriber:Uncensored`), Whisper's own hallucinations
+  (credits, loops, sound tags) are filtered.
 - **Chat analytics.** The Api projects both inboxes (`ReceivedWebhooks.RawBody`
   + `ReceivedRealtimeEvents.RawData`) into a queryable read model (`ChatMessages`,
   `ChatMentions`, `ChatterEvents`) and serves read-only chatter profiles, pair
@@ -291,6 +305,42 @@ public class MyChatConsumer : IConsumer<ChatMessageSent>
 {
     public Task Consume(ConsumeContext<ChatMessageSent> ctx) => /* … */;
 }
+```
+
+### Live transcripts
+
+If the transcriber is running, subscribe to its output the same way — small
+messages, no TTL, so a normal durable queue is fine:
+
+```csharp
+KickMediaTopology.ConfigurePublishTopology(cfg);
+cfg.ReceiveEndpoint("myapp-transcripts", e =>
+{
+    KickMediaTopology.BindLiveTranscript(e, "xqc"); // or no slugs for every channel
+    e.ConfigureConsumer<MyTranscriptConsumer>(ctx);
+});
+```
+
+The Api stores every transcript in the `LiveTranscripts` table and serves them under
+`/api/analytics/channels/{slug}/transcripts` (and `/transcripts/at?at=...` for "what was
+being said when this chat message was sent"); see `docs/CHAT-ANALYTICS.md`.
+
+Running the transcriber itself (Aspire starts it for you; standalone):
+
+```pwsh
+# ffmpeg must be on PATH (or set Transcriber__FfmpegPath). First run downloads the model.
+dotnet run --project src/TailoredApps.KickGateway.Subscribers.Transcriber
+# Channels, language, model, GPU, output dir — see the "Transcriber" section in its appsettings.json,
+# e.g. Transcriber__Channels__0=xqc Transcriber__Language=en Transcriber__Model=Small Transcriber__UseGpu=false
+```
+
+As a container (CPU only, pick a model the host keeps up with):
+
+```sh
+docker build -f src/TailoredApps.KickGateway.Subscribers.Transcriber/Dockerfile -t kickgateway-transcriber .
+docker run -d --name transcriber -v whisper-models:/models -v transcripts:/transcripts \
+  -e RabbitMq__Host=rabbitmq -e RabbitMq__Username=... -e RabbitMq__Password=... \
+  -e Transcriber__Model=Small -e Transcriber__Language=pl kickgateway-transcriber
 ```
 
 ### On-demand channel stats

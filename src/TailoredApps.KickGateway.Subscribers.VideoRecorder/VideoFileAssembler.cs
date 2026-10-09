@@ -126,13 +126,12 @@ public sealed class VideoFileAssembler : IDisposable
         st.Stream = null;
     }
 
-    /// <summary>TS vs fMP4 — by MIME first, then the source URL extension as a fallback.</summary>
-    public static bool IsTransportStream(LiveVideoSegment seg)
-    {
-        if (seg.ContentType.Contains("mp2t", StringComparison.OrdinalIgnoreCase)) return true;
-        if (seg.ContentType.Contains("mp4", StringComparison.OrdinalIgnoreCase)) return false;
-        return seg.SegmentUri.EndsWith(".ts", StringComparison.OrdinalIgnoreCase);
-    }
+    /// <summary>
+    /// TS vs fMP4. Sniffs the bytes first (the CDN serves TS as application/octet-stream with a
+    /// query-string URL, so MIME and a naive extension check both lie); see
+    /// <see cref="LiveVideoSegmentExtensions.DetectContainer"/>.
+    /// </summary>
+    public static bool IsTransportStream(LiveVideoSegment seg) => LiveVideoSegmentExtensions.IsTransportStream(seg);
 
     private static string Sanitize(string slug) =>
         new string(slug.Where(c => char.IsLetterOrDigit(c) || c is '-' or '_').ToArray());

@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.Extensions.Options;
 using TailoredApps.KickGateway.Api.Analytics;
 using TailoredApps.KickGateway.Api.Data;
+using TailoredApps.KickGateway.Api.Transcripts;
 
 namespace TailoredApps.KickGateway.Api.Endpoints;
 
@@ -142,6 +143,28 @@ public static class AnalyticsEndpoints
             var scope = await AnalyticsScope.ForUserAsync(principal, db, ct);
             var context = await svc.ContextAsync(scope, messageId.Trim(), Math.Clamp(before ?? 15, 0, 100), Math.Clamp(after ?? 15, 0, 100), ct);
             return context is null ? Results.NotFound(new { error = $"message '{messageId}' not found" }) : Json(context);
+        });
+
+        // Live speech-to-text stored from Subscribers.Transcriber (see docs/CHAT-ANALYTICS.md).
+        g.MapGet("/channels/{slug}/transcripts", async (string slug, string? from, string? to, string? q, string? cursor, int? limit,
+            ClaimsPrincipal user, KickGatewayDbContext db, IOptions<ChatAnalyticsOptions> o, CancellationToken ct) =>
+        {
+            if (!AnalyticsTime.TryResolveWindow(from, to, o.Value.DefaultWindowDays, DateTime.UtcNow, out var window, out var err)) return Bad(err);
+            var scope = await AnalyticsScope.ForUserAsync(user, db, ct);
+            var channel = Slug(slug);
+            if (!scope.Allows(channel)) return ChannelNotFound(channel);
+            return Json(await TranscriptQueries.PageAsync(db, channel, window, q, cursor, Math.Clamp(limit ?? 100, 1, 500), ct));
+        });
+
+        // What was being said at a given moment (e.g. the CreatedAt of a chat message), +/- tolerance seconds.
+        g.MapGet("/channels/{slug}/transcripts/at", async (string slug, DateTime at, double? tolerance,
+            ClaimsPrincipal user, KickGatewayDbContext db, CancellationToken ct) =>
+        {
+            var scope = await AnalyticsScope.ForUserAsync(user, db, ct);
+            var channel = Slug(slug);
+            if (!scope.Allows(channel)) return ChannelNotFound(channel);
+            var utc = at.Kind == DateTimeKind.Utc ? at : at.ToUniversalTime();
+            return Json(await TranscriptQueries.AroundAsync(db, channel, utc, Math.Clamp(tolerance ?? 20, 0, 300), ct));
         });
 
         return routes;

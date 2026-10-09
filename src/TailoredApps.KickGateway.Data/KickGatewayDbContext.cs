@@ -23,6 +23,9 @@ public class KickGatewayDbContext : DbContext
     public DbSet<ChatterEvent> ChatterEvents => Set<ChatterEvent>();
     public DbSet<AnalyticsCheckpoint> AnalyticsCheckpoints => Set<AnalyticsCheckpoint>();
 
+    // Live speech-to-text slices from Subscribers.Transcriber (LiveTranscriptConsumer). Not derived from the inboxes.
+    public DbSet<LiveTranscriptRecord> LiveTranscripts => Set<LiveTranscriptRecord>();
+
     // Deterministic Guids for the bootstrap SuperAdmin so the EF migration is
     // reproducible. The username on the seeded row is a placeholder
     // ("superadmin"); the real username is set at startup from the
@@ -190,6 +193,16 @@ public class KickGatewayDbContext : DbContext
         });
 
         modelBuilder.Entity<AnalyticsCheckpoint>(b => b.HasKey(x => x.Name));
+
+        modelBuilder.Entity<LiveTranscriptRecord>(b =>
+        {
+            b.HasKey(x => x.Id);
+            // Redelivery / replica race guard (the consumer checks it first, the index enforces it).
+            b.HasIndex(x => x.DedupeKey).IsUnique();
+            // Channel timelines and joins with chat by time window.
+            b.HasIndex(x => new { x.ChannelSlug, x.StartedAt });
+            b.HasIndex(x => new { x.ChannelSlug, x.EndedAt });
+        });
 
         // MassTransit transactional outbox + inbox tables — registered here so EF migrations create them.
         modelBuilder.AddInboxStateEntity();
