@@ -61,6 +61,19 @@ public record ChannelStats
     public bool IsMature { get; init; }
     public string? ThumbnailUrl { get; init; }
 
+    /// <summary>Kick's numeric id of the current broadcast (<c>livestream.id</c>); null when offline.</summary>
+    public string? LivestreamId { get; init; }
+
+    /// <summary>
+    /// The current broadcast's VOD id as kick.com uses it in watch URLs (a time-ordered uuid, resolved
+    /// through the videos API and cached per broadcast). Null when offline, or when Kick has not created
+    /// the video entry yet - it appears a little after the stream starts, so retry on the next snapshot.
+    /// </summary>
+    public string? LiveVodId { get; init; }
+
+    /// <summary>Ready-to-use <c>https://kick.com/{slug}/videos/{LiveVodId}</c>, or null (see <see cref="LiveVodId"/>).</summary>
+    public string? LiveVodUrl { get; init; }
+
     /// <summary>Category the channel is currently streaming under (null when offline / unknown).</summary>
     public ChannelStatsCategory? Category { get; init; }
 

@@ -377,7 +377,9 @@ Subscribers can also ask the gateway for a channel's **live stats** (viewer
 count, live state, followers, category, …) by publishing `ChannelStatsRequested`
 and consuming `ChannelStats` — or via `IRequestClient` for inline request/
 response. The gateway fetches them from the Cloudflare-protected website API
-through the clips-fetcher sidecar. See `docs/CLIENT-INTEGRATION.md`.
+through the clips-fetcher sidecar. A live snapshot also carries `LiveVodUrl` — the watch link
+of the broadcast in progress — and every `ChannelVideo` has a ready-made `WatchUrl`; never build
+VOD links from the legacy `VideoUuid` (404). See `docs/CLIENT-INTEGRATION.md`.
 
 ## Notes
 

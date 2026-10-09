@@ -78,10 +78,12 @@ public class KickChannelClient : IKickChannelClient
         DateTime? started = null;
         var mature = false;
         KickChannelCategory? category = null;
+        string? livestreamId = null;
 
         if (root.TryGetProperty("livestream", out var ls) && ls.ValueKind == JsonValueKind.Object)
         {
             isLive = ls.ReadAsBool("is_live");
+            livestreamId = NullIfEmpty(ls.ReadAsString("id"));
             viewers = ls.ReadAsInt("viewer_count");
             title = NullIfEmpty(ls.ReadAsString("session_title"));
             started = ParseDate(ls, "start_time") ?? ParseDate(ls, "created_at");
@@ -119,7 +121,8 @@ public class KickChannelClient : IKickChannelClient
             mature,
             thumb,
             category,
-            rawJson);
+            rawJson,
+            livestreamId);
     }
 
     private static KickChannelCategory ParseCategory(JsonElement c) =>

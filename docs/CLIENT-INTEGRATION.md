@@ -82,6 +82,14 @@ protected website API via its sidecar — you just exchange two messages (in
 set) — so request/response callers never hang. `RawPayload` carries the full
 upstream JSON for anything not surfaced as a typed field.
 
+**Linking to the stream in progress.** When `IsLive` is true the snapshot also carries
+`LivestreamId`, `LiveVodId` and a ready-made `LiveVodUrl`
+(`https://kick.com/{slug}/videos/{LiveVodId}`) — the VOD page of the broadcast running right
+now, the same link kick.com shows as *current broadcast*. `LiveVodUrl` can still be null for the
+first minute or so of a stream (Kick creates the video entry slightly after going live); take the
+value from the next snapshot when it appears. Never build a watch URL from any other id — the
+legacy `video.uuid` 404s on kick.com.
+
 **Option A — publish / subscribe** (routed by slug like every other contract):
 
 ```csharp
@@ -109,6 +117,14 @@ Console.WriteLine($"{s.BroadcasterSlug}: live={s.IsLive} viewers={s.ViewerCount}
 > The fetch is on-demand and uncached — request at whatever cadence you need
 > (e.g. poll every 30–60 s for a viewer-count overlay), but be reasonable: each
 > request is a live hit on Kick through the sidecar.
+
+### Past broadcasts (VOD listing)
+
+`ChannelVideosRequested` — `ChannelVideos` works the same way (publish/subscribe or
+request/response). Every `ChannelVideo` carries `VodId` and a ready-to-use `WatchUrl`
+(`https://kick.com/{slug}/videos/{VodId}`); `IsLive` marks the broadcast in progress. `VideoUuid`
+is Kick's legacy id, kept for correlation only — it does **not** work in a URL. `VodId`/`WatchUrl`
+are null when the gateway could not resolve the id (no video yet, lookup failed); don't link then.
 
 ---
 
