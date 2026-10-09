@@ -22,6 +22,7 @@ env:
   REALTIME_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-realtime
   CLIPS_FETCHER_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-clips-fetcher
   MCP_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-mcp
+  TRANSCRIBER_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-transcriber
 
 jobs:
   build-and-push:
@@ -89,6 +90,18 @@ jobs:
             ${{ env.MCP_IMAGE }}:${{ github.sha }}
           cache-from: type=gha,scope=mcp
           cache-to: type=gha,scope=mcp,mode=max
+
+      - name: Build & push Transcriber image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/TailoredApps.KickGateway.Subscribers.Transcriber/Dockerfile
+          push: true
+          tags: |
+            ${{ env.TRANSCRIBER_IMAGE }}:latest
+            ${{ env.TRANSCRIBER_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha,scope=transcriber
+          cache-to: type=gha,scope=transcriber,mode=max
 
       - name: Build & push clips-fetcher image
         uses: docker/build-push-action@v6
@@ -235,6 +248,39 @@ jobs:
                 - "traefik.http.services.kickgateway-mcp.loadbalancer.server.port=8080"
                 - "traefik.docker.network=traefik-public"
 
+            # Live speech-to-text, CPU only (no GPU on the VPS). Consumes LiveVideoSegment - so it only
+            # works while REALTIME_VIDEO_ENABLED=true and a channel is live - and publishes LiveTranscript,
+            # which the api stores in LiveTranscripts. Pick a model the host keeps up with: Small (default)
+            # is ~6x faster than LargeV3Turbo on CPU. The GGML model is downloaded from Hugging Face on
+            # first start into the models volume. cpu_shares keeps Whisper below the api under contention.
+            transcriber:
+              image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-transcriber:${IMAGE_TAG:-latest}
+              restart: unless-stopped
+              depends_on:
+                - api
+              cpu_shares: 512
+              environment:
+                - DOTNET_ENVIRONMENT=Production
+                - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
+                - RabbitMq__Port=${RABBITMQ_PORT:-5672}
+                - RabbitMq__VirtualHost=${RABBITMQ_VHOST:-/}
+                - RabbitMq__Username=${RABBITMQ_USERNAME:-}
+                - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
+                - Transcriber__UseGpu=false
+                - Transcriber__Model=${TRANSCRIBER_MODEL:-Small}
+                - Transcriber__Quantization=${TRANSCRIBER_QUANTIZATION:-Q5_0}
+                - Transcriber__Language=${TRANSCRIBER_LANGUAGE:-pl}
+                - Transcriber__Threads=${TRANSCRIBER_THREADS:-0}
+                - Transcriber__WriteFiles=${TRANSCRIBER_WRITE_FILES:-false}
+                - Transcriber__ModelDir=/models
+                - Transcriber__OutputDir=/transcripts
+              volumes:
+                - transcriber-models:/models
+                - transcriber-transcripts:/transcripts
+              networks:
+                - default
+                - traefik-public
+
             clips-fetcher:
               image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-clips-fetcher:${IMAGE_TAG:-latest}
               restart: unless-stopped
@@ -242,6 +288,9 @@ jobs:
                 - FETCH_SECRET=${CLIPS_FETCHER_SECRET:-}
               networks:
                 - default
+          volumes:
+            transcriber-models:
+            transcriber-transcripts:
           COMPOSE
 
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
@@ -263,6 +312,11 @@ jobs:
           CLIPS_FETCHER_SECRET=${{ secrets.CLIPS_FETCHER_SECRET }}
           ANALYTICS_API_KEY=${{ secrets.ANALYTICS_API_KEY }}
           REALTIME_VIDEO_ENABLED=${{ vars.REALTIME_VIDEO_ENABLED }}
+          TRANSCRIBER_MODEL=${{ vars.TRANSCRIBER_MODEL }}
+          TRANSCRIBER_QUANTIZATION=${{ vars.TRANSCRIBER_QUANTIZATION }}
+          TRANSCRIBER_LANGUAGE=${{ vars.TRANSCRIBER_LANGUAGE }}
+          TRANSCRIBER_THREADS=${{ vars.TRANSCRIBER_THREADS }}
+          TRANSCRIBER_WRITE_FILES=${{ vars.TRANSCRIBER_WRITE_FILES }}
           ENVFILE"
 
           # Ensure shared external networks exist (idempotent).
@@ -293,7 +347,7 @@ jobs:
           if [ -n "$UNHEALTHY" ]; then
             echo "❌ Unhealthy containers found:"
             echo "$UNHEALTHY"
-            $SSH_CMD "cd /opt/apps/kickgateway && docker compose logs --tail 30 api worker"
+            $SSH_CMD "cd /opt/apps/kickgateway && docker compose logs --tail 30 api worker transcriber"
             exit 1
           fi
 
