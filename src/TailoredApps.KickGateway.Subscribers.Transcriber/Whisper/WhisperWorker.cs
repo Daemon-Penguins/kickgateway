@@ -10,8 +10,15 @@ namespace TailoredApps.KickGateway.Subscribers.Transcriber.Whisper;
 /// The single Whisper inference loop. Loads the model once, warms it up (the first GPU call compiles
 /// shaders and can take a long time), then drains the coordinator's chunk queue one chunk at a time:
 /// Whisper → <see cref="TranscriptFilter"/> → <see cref="LiveTranscript"/> → every registered sink.
-/// One processor serves all channels: it runs without cross-call context, so channels never bleed
+/// One model serves all channels: processors run without cross-call context, so channels never bleed
 /// into each other, and whisper.cpp is not safe to run concurrently on one context anyway.
+/// <para>
+/// Language: with <see cref="TranscriberOptions.Languages"/> set, every chunk first goes through Whisper's
+/// language detector restricted to those candidates; <see cref="LanguageTracker"/> turns the reading into a
+/// sticky per-channel language (a confident other language switches, an unsure one keeps the current). The
+/// chunk is then transcribed by a processor built for that language (one per language, same loaded model,
+/// language-specific prompt), and the transcript carries both the language used and what was detected.
+/// </para>
 /// <para>
 /// Native failures (an <see cref="SEHException"/> is what a C++ exception from ggml/Vulkan looks like
 /// from here — device lost, out of GPU memory, …) are recovered in escalating steps: rebuild the
@@ -27,6 +34,18 @@ public sealed class WhisperWorker : BackgroundService
     private const string UncensorRegex = @".*\*.*";
     private const string PolishProfanityPrompt = "Kurwa, chuj, pierdolić, jebać, zajebiście, spierdalaj, pojebane.";
     private const string EnglishProfanityPrompt = "Fuck, shit, bitch, asshole, motherfucker.";
+    private const string GermanProfanityPrompt = "Scheiße, verdammt, Arschloch, fick dich, Hurensohn, verfickt.";
+
+    /// <summary>
+    /// Every word of the profanity prompts, for <see cref="TranscriptFilter"/>'s prompt-echo rule: on music or
+    /// noise Whisper tends to "read back" the prompt ("pojebane, pojebane, pojebane", "shit, bitch, shit, bitch").
+    /// </summary>
+    public static IReadOnlyList<string> ProfanityVocabulary { get; } =
+        (PolishProfanityPrompt + " " + EnglishProfanityPrompt + " " + GermanProfanityPrompt)
+            .Split([' ', ',', '.'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    /// <summary>Below this a chunk is too short for a reliable language reading (an idle flush of a word or two) — the channel keeps its language.</summary>
+    private const double MinDetectSeconds = 3.0;
 
     private const int FailuresBeforeModelReload = 2;
     private const int FailuresBeforeCpuFallback = 3;
@@ -47,9 +66,15 @@ public sealed class WhisperWorker : BackgroundService
     private readonly TimeSpan _inferenceTimeout;
     private bool _warmedUpOnce;
 
+    private readonly LanguageTracker _languages;
+    private readonly string[] _candidates;
+
     private string _modelPath = "";
     private WhisperFactory? _factory;
+    /// <summary>Primary processor: the fallback language (or <c>auto</c>). Warmed up at start; also runs the language detector.</summary>
     private WhisperProcessor? _processor;
+    /// <summary>Processors by language (the language token and the prompt differ), built lazily from the same loaded model.</summary>
+    private readonly Dictionary<string, WhisperProcessor> _byLanguage = new(StringComparer.OrdinalIgnoreCase);
     private bool _cpuFallback;
     private int _consecutiveFailures;
 
@@ -73,6 +98,8 @@ public sealed class WhisperWorker : BackgroundService
         _lifetime = lifetime;
         _log = log;
         _inferenceTimeout = TimeSpan.FromSeconds(opts.InferenceTimeoutSeconds);
+        _candidates = opts.CandidateLanguages;
+        _languages = new LanguageTracker(opts.FallbackLanguage, opts.LanguageSwitchMinProbability, opts.LanguageSwitchConfirmChunks);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -83,7 +110,7 @@ public sealed class WhisperWorker : BackgroundService
         await EnsureEngineAsync(stoppingToken);
 
         _log.LogInformation("Transcriber online — model {Model}, language {Lang}, ~{Chunk}s chunks, sinks: {Sinks}",
-            _models.ModelName, _opts.Language, _opts.ChunkSeconds, string.Join(", ", _sinks.Select(s => s.Name)));
+            _models.ModelName, _opts.DescribeLanguageMode(), _opts.ChunkSeconds, string.Join(", ", _sinks.Select(s => s.Name)));
 
         try
         {
@@ -111,8 +138,7 @@ public sealed class WhisperWorker : BackgroundService
             try
             {
                 await EnsureEngineAsync(ct);
-                var processor = _processor!;
-                await Watchdog.WithDeadlineAsync(token => ProcessAsync(processor, job, token), _inferenceTimeout, $"transcribing a {job.Seconds:F1}s chunk", ct);
+                await Watchdog.WithDeadlineAsync(token => ProcessAsync(job, token), _inferenceTimeout, $"transcribing a {job.Seconds:F1}s chunk", ct);
                 _consecutiveFailures = 0;
                 return;
             }
@@ -190,7 +216,8 @@ public sealed class WhisperWorker : BackgroundService
     {
         if (_processor is not null) return;
         _factory ??= _models.CreateFactory(_modelPath, useGpu: _opts.UseGpu && !_cpuFallback);
-        var processor = BuildProcessor(_factory);
+        var primaryLanguage = _opts.DetectsLanguage ? _opts.FallbackLanguage : _opts.Language.Trim();
+        var processor = BuildProcessor(_factory, primaryLanguage);
         try
         {
             var timeout = _warmedUpOnce ? _inferenceTimeout : FirstWarmUpTimeout;
@@ -203,16 +230,27 @@ public sealed class WhisperWorker : BackgroundService
             throw;
         }
         _processor = processor;
+        _byLanguage[primaryLanguage] = processor;
+    }
+
+    /// <summary>The processor for <paramref name="language"/>; built on first use from the already loaded model (no warm-up needed — shaders are compiled per model, not per processor).</summary>
+    private WhisperProcessor ProcessorFor(string language)
+    {
+        if (_byLanguage.TryGetValue(language, out var existing)) return existing;
+        var processor = BuildProcessor(_factory!, language);
+        _byLanguage[language] = processor;
+        _log.LogInformation("Whisper processor for language {Lang} ready", language);
+        return processor;
     }
 
     private async Task DisposeEngineAsync(bool disposeFactory)
     {
-        if (_processor is not null)
-        {
-            var p = _processor;
-            _processor = null;
+        var processors = _byLanguage.Values.Distinct().ToList();
+        if (_processor is not null && !processors.Contains(_processor)) processors.Add(_processor);
+        _processor = null;
+        _byLanguage.Clear();
+        foreach (var p in processors)
             await DisposeWithTimeoutAsync(() => p.DisposeAsync().AsTask(), "processor");
-        }
         if (disposeFactory && _factory is not null)
         {
             var f = _factory;
@@ -238,15 +276,15 @@ public sealed class WhisperWorker : BackgroundService
         }
     }
 
-    private WhisperProcessor BuildProcessor(WhisperFactory factory)
+    private WhisperProcessor BuildProcessor(WhisperFactory factory, string language)
     {
         var b = factory.CreateBuilder();
 
-        if (string.Equals(_opts.Language, "auto", StringComparison.OrdinalIgnoreCase)) b.WithLanguageDetection();
-        else b.WithLanguage(_opts.Language);
+        if (string.Equals(language, "auto", StringComparison.OrdinalIgnoreCase)) b.WithLanguageDetection(); // language "" → whisper.cpp detects, then transcribes
+        else b.WithLanguage(language);
 
         b.WithThreads(_opts.EffectiveThreads);
-        var prompt = BuildPrompt();
+        var prompt = BuildPrompt(language);
         if (prompt is not null) b.WithPrompt(prompt);
         if (_opts.BeamSize > 0) b.WithBeamSearchSamplingStrategy(s => s.WithBeamSize(_opts.BeamSize));
 
@@ -261,11 +299,11 @@ public sealed class WhisperWorker : BackgroundService
     /// Initial prompt = the configured names/slang plus, when <see cref="TranscriberOptions.Uncensored"/>,
     /// a few swear words spelled out in the stream language so the model stops writing k***a.
     /// </summary>
-    private string? BuildPrompt()
+    private string? BuildPrompt(string language)
     {
         var parts = new List<string>(2);
         if (!string.IsNullOrWhiteSpace(_opts.Prompt)) parts.Add(_opts.Prompt.Trim());
-        if (_opts.Uncensored) parts.Add(ProfanityPrompt(_opts.Language));
+        if (_opts.Uncensored) parts.Add(ProfanityPrompt(language));
         return parts.Count == 0 ? null : string.Join(" ", parts);
     }
 
@@ -273,6 +311,7 @@ public sealed class WhisperWorker : BackgroundService
     {
         "pl" => PolishProfanityPrompt,
         "en" => EnglishProfanityPrompt,
+        "de" => GermanProfanityPrompt,
         _ => PolishProfanityPrompt + " " + EnglishProfanityPrompt, // auto / other: cover both common stream languages
     };
 
@@ -283,10 +322,13 @@ public sealed class WhisperWorker : BackgroundService
         _log.LogInformation("Whisper warm-up took {Ms} ms", sw.ElapsedMilliseconds);
     }
 
-    private async Task ProcessAsync(WhisperProcessor processor, TranscriptionJob job, CancellationToken ct)
+    private async Task ProcessAsync(TranscriptionJob job, CancellationToken ct)
     {
         var waited = (DateTime.UtcNow - job.EnqueuedAt).TotalSeconds;
         var sw = Stopwatch.StartNew();
+
+        var decision = DecideLanguage(job);
+        var processor = _opts.DetectsLanguage ? ProcessorFor(decision.Language) : _processor!;
 
         var kept = new List<LiveTranscriptSegment>();
         string? language = null;
@@ -333,7 +375,9 @@ public sealed class WhisperWorker : BackgroundService
             AudioStartSeconds = job.AudioStartSeconds,
             AudioSeconds = job.Seconds,
             Text = string.Join(' ', kept.Select(k => k.Text)),
-            Language = ResolveLanguage(language),
+            Language = ResolveLanguage(decision, language),
+            DetectedLanguage = _opts.DetectsLanguage ? decision.Detected : (_opts.IsAutoLanguage ? NullIfAuto(language) : null),
+            LanguageProbability = decision.Probability,
             Confidence = kept.Average(k => k.Confidence),
             Segments = kept.ToArray(),
             FirstMediaSequence = job.FirstMediaSequence,
@@ -344,8 +388,8 @@ public sealed class WhisperWorker : BackgroundService
         };
 
         _emitted++;
-        _log.LogInformation("[{Slug}] {Sec:F1}s → {Chars} chars in {Ms} ms (queued {Wait:F1}s): {Preview}",
-            job.Slug, job.Seconds, transcript.Text.Length, sw.ElapsedMilliseconds, waited, Preview(transcript.Text));
+        _log.LogInformation("[{Slug}] {Sec:F1}s [{Lang}] → {Chars} chars in {Ms} ms (queued {Wait:F1}s): {Preview}",
+            job.Slug, job.Seconds, transcript.Language.Length == 0 ? "?" : transcript.Language, transcript.Text.Length, sw.ElapsedMilliseconds, waited, Preview(transcript.Text));
 
         foreach (var sink in _sinks)
         {
@@ -364,12 +408,41 @@ public sealed class WhisperWorker : BackgroundService
         }
     }
 
-    private string ResolveLanguage(string? detected)
+    /// <summary>
+    /// Runs Whisper's language detector on the chunk, restricted to the configured candidates, and lets the
+    /// tracker decide which language the chunk is transcribed in. Only when detection is on; fixed and
+    /// <c>auto</c> modes resolve the language from the transcription itself.
+    /// </summary>
+    private LanguageDecision DecideLanguage(TranscriptionJob job)
     {
-        if (!string.IsNullOrWhiteSpace(detected) && !string.Equals(detected, "auto", StringComparison.OrdinalIgnoreCase))
-            return detected;
-        return string.Equals(_opts.Language, "auto", StringComparison.OrdinalIgnoreCase) ? "" : _opts.Language;
+        if (!_opts.DetectsLanguage) return new LanguageDecision(_opts.Language.Trim(), null, null, false);
+        if (job.Seconds < MinDetectSeconds) return _languages.Keep(job.Slug);
+
+        var sw = Stopwatch.StartNew();
+        var (detected, probability) = _processor!.DetectLanguageWithProbability(job.Samples, _candidates);
+        var decision = _languages.Decide(job.Slug, detected, probability);
+
+        if (decision.Switched)
+            _log.LogInformation("[{Slug}] language → {Lang} (detector p={P:F2}, {Ms} ms)", job.Slug, decision.Language, probability, sw.ElapsedMilliseconds);
+        else if (decision.PendingConfirmations > 0)
+            _log.LogInformation("[{Slug}] detector hears {Detected} (p={P:F2}, {N}/{Needed}) — staying with {Lang} until confirmed", job.Slug, detected, probability, decision.PendingConfirmations, _opts.LanguageSwitchConfirmChunks, decision.Language);
+        else if (detected is null)
+            _log.LogDebug("[{Slug}] language detector gave no reading — staying with {Lang}", job.Slug, decision.Language);
+        else
+            _log.LogDebug("[{Slug}] language {Lang} (detector heard {Detected} p={P:F2}, {Ms} ms)", job.Slug, decision.Language, detected, probability, sw.ElapsedMilliseconds);
+        return decision;
     }
+
+    /// <summary>Language the slice was transcribed in: the tracker's choice, Whisper's pick in <c>auto</c> mode, else the fixed one.</summary>
+    private string ResolveLanguage(LanguageDecision decision, string? segmentLanguage)
+    {
+        if (_opts.DetectsLanguage) return decision.Language;
+        if (_opts.IsAutoLanguage) return NullIfAuto(segmentLanguage) ?? "";
+        return _opts.Language.Trim();
+    }
+
+    private static string? NullIfAuto(string? language) =>
+        string.IsNullOrWhiteSpace(language) || string.Equals(language, "auto", StringComparison.OrdinalIgnoreCase) ? null : language;
 
     private void WarnIfLagging(TranscriptionJob job, double waited, double processing)
     {

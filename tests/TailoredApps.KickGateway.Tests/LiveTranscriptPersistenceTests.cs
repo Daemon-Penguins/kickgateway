@@ -30,6 +30,8 @@ public class LiveTranscriptPersistenceTests(ChatAnalyticsDatabase fixture) : ICl
         AudioSeconds = seconds,
         Text = text,
         Language = "pl",
+        DetectedLanguage = "PL", // stored lowercase
+        LanguageProbability = 0.97f,
         Confidence = 0.85f,
         Segments =
         [
@@ -60,7 +62,7 @@ public class LiveTranscriptPersistenceTests(ChatAnalyticsDatabase fixture) : ICl
         {
             var first = Transcript(0, 12.25, "Będzie pani zadowolona. A ty już zrobiłeś tygodniówkę?");
             var second = Transcript(12.25, 10.05, "Nie, nie, nie. No właśnie ostatnią wykopywałem.");
-            var third = Transcript(22.3, 5.25, "Mówię ci, zmień sobie z niki.");
+            var third = Transcript(22.3, 5.25, "Ich sage dir, ändere deinen Nick.") with { Language = "de", DetectedLanguage = "de", LanguageProbability = 0.88f };
 
             await harness.Bus.Publish(first);
             await harness.Bus.Publish(first);  // broker redelivery / duplicate → must not create a second row
@@ -86,26 +88,37 @@ public class LiveTranscriptPersistenceTests(ChatAnalyticsDatabase fixture) : ICl
 
             // Window covering only the second slice (overlap semantics: StartedAt < To && EndedAt >= From).
             var page = await TranscriptQueries.PageAsync(db, "alpha",
-                new AnalyticsWindow(T0.AddSeconds(13), T0.AddSeconds(20)), null, null, 100, default);
+                new AnalyticsWindow(T0.AddSeconds(13), T0.AddSeconds(20)), null, null, null, 100, default);
             Assert.Single(page.Items);
             Assert.Equal(second.Text, page.Items[0].Text);
             Assert.Null(page.NextCursor);
             Assert.Equal(T0.AddSeconds(12.25), page.Items[0].Segments[0].StartedAt);
 
             // Keyset paging, oldest first.
-            var p1 = await TranscriptQueries.PageAsync(db, "alpha", new AnalyticsWindow(null, T0.AddDays(1)), null, null, 2, default);
+            var p1 = await TranscriptQueries.PageAsync(db, "alpha", new AnalyticsWindow(null, T0.AddDays(1)), null, null, null, 2, default);
             Assert.Equal(2, p1.Items.Count);
             Assert.NotNull(p1.NextCursor);
-            var p2 = await TranscriptQueries.PageAsync(db, "alpha", new AnalyticsWindow(null, T0.AddDays(1)), null, p1.NextCursor, 2, default);
+            var p2 = await TranscriptQueries.PageAsync(db, "alpha", new AnalyticsWindow(null, T0.AddDays(1)), null, null, p1.NextCursor, 2, default);
             Assert.Single(p2.Items);
             Assert.Equal(third.Text, p2.Items[0].Text);
             Assert.Null(p2.NextCursor);
 
             // Text search is a substring match; LIKE wildcards in the query are literal.
-            var search = await TranscriptQueries.PageAsync(db, "alpha", new AnalyticsWindow(null, T0.AddDays(1)), "wykopywałem", null, 10, default);
+            var search = await TranscriptQueries.PageAsync(db, "alpha", new AnalyticsWindow(null, T0.AddDays(1)), "wykopywałem", null, null, 10, default);
             Assert.Single(search.Items);
-            var noWildcard = await TranscriptQueries.PageAsync(db, "alpha", new AnalyticsWindow(null, T0.AddDays(1)), "%", null, 10, default);
+            var noWildcard = await TranscriptQueries.PageAsync(db, "alpha", new AnalyticsWindow(null, T0.AddDays(1)), "%", null, null, 10, default);
             Assert.Empty(noWildcard.Items);
+
+            // Language filter (case-insensitive code) + the detection fields round-trip through the row and the DTO.
+            var german = await TranscriptQueries.PageAsync(db, "alpha", new AnalyticsWindow(null, T0.AddDays(1)), null, "DE", null, 10, default);
+            Assert.Single(german.Items);
+            Assert.Equal(third.Text, german.Items[0].Text);
+            Assert.Equal("de", german.Language);
+            Assert.Equal("de", german.Items[0].DetectedLanguage);
+            Assert.Equal(0.88f, german.Items[0].LanguageProbability);
+            Assert.Equal(2, (await TranscriptQueries.PageAsync(db, "alpha", new AnalyticsWindow(null, T0.AddDays(1)), null, "pl", null, 10, default)).Items.Count);
+            Assert.Equal("pl", rows[0].DetectedLanguage);
+            Assert.Equal(0.97f, rows[0].LanguageProbability);
 
             // "What was being said when this chat message was sent?" — a moment inside the first slice.
             var around = await TranscriptQueries.AroundAsync(db, "alpha", T0.AddSeconds(5), 0, default);
@@ -113,7 +126,7 @@ public class LiveTranscriptPersistenceTests(ChatAnalyticsDatabase fixture) : ICl
             Assert.Equal(first.Text, around[0].Text);
 
             // Other channels are invisible.
-            Assert.Empty((await TranscriptQueries.PageAsync(db, "beta", new AnalyticsWindow(null, T0.AddDays(1)), null, null, 10, default)).Items);
+            Assert.Empty((await TranscriptQueries.PageAsync(db, "beta", new AnalyticsWindow(null, T0.AddDays(1)), null, null, null, 10, default)).Items);
         }
         finally
         {
@@ -145,5 +158,29 @@ public class LiveTranscriptPersistenceTests(ChatAnalyticsDatabase fixture) : ICl
         Assert.Single(segs);
         Assert.Equal(0.94f, segs[0].Confidence);
         Assert.Equal(T0, segs[0].StartedAt);
+    }
+
+    [Fact]
+    public void Mapping_keeps_the_language_decision_and_normalizes_codes()
+    {
+        var r = LiveTranscriptConsumer.Map(Transcript(0, 12, "hallo"), "alpha");
+        Assert.Equal("pl", r.Language);
+        Assert.Equal("pl", r.DetectedLanguage);
+        Assert.Equal(0.97f, r.LanguageProbability);
+
+        // Unsure reading: transcribed in the channel's language, the detector's different guess is kept alongside.
+        var unsure = LiveTranscriptConsumer.Map(Transcript(0, 12, "hallo") with { Language = "pl", DetectedLanguage = "de", LanguageProbability = 0.41f }, "alpha");
+        Assert.Equal("pl", unsure.Language);
+        Assert.Equal("de", unsure.DetectedLanguage);
+        Assert.Equal(0.41f, unsure.LanguageProbability);
+
+        // Fixed-language transcriber (older or detection off): nothing detected.
+        var fixedLang = LiveTranscriptConsumer.Map(Transcript(0, 12, "hej") with { DetectedLanguage = null, LanguageProbability = null }, "alpha");
+        Assert.Null(fixedLang.DetectedLanguage);
+        Assert.Null(fixedLang.LanguageProbability);
+
+        var dto = TranscriptQueries.ToDto(unsure);
+        Assert.Equal("de", dto.DetectedLanguage);
+        Assert.Equal(0.41f, dto.LanguageProbability);
     }
 }

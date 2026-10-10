@@ -144,6 +144,21 @@ Status: actively developed.
   measured: no VRAM growth. `Transcriber:Uncensored` bans `*`-containing tokens via whisper.cpp
   `suppress_regex` (Whisper learned subtitle-style `k***a` censoring); `Threads` auto = cores-2
   clamped 4..16 (whisper.cpp's own default of 4 made the CPU fallback 3x slower than needed).
+  **Language is detected per chunk, sticky per channel.** `Transcriber:Languages` (default `pl,en,de`) is
+  the candidate list: every chunk >= 3 s first goes through `DetectLanguageWithProbability` restricted to
+  those codes (one extra encoder pass, ~0.5 s on a GPU), and `LanguageTracker` switches the channel only
+  when the SAME other language is read confidently (`LanguageSwitchMinProbability`, 0.7) in
+  `LanguageSwitchConfirmChunks` (2) consecutive chunks - measured live: background music and Whisper's
+  silence fillers ("I'm sorry.") score 0.6-0.9 for the wrong language, so one confident chunk is not
+  evidence; an unsure reading or the current language breaks the streak. Each language gets its own processor from
+  the same loaded model (the prompt, incl. the profanity list, is per language). `Transcriber:Language` is
+  the start/fallback language; `auto` = Whisper's unrestricted pick (`WithLanguageDetection()` sets
+  language `""`, which still transcribes - NOT the detect-only flag); empty `Languages` = fixed language.
+  `LiveTranscript.Language` is what the slice was transcribed in, `DetectedLanguage`/`LanguageProbability`
+  what the detector heard (null when detection did not run); both are stored (`AddTranscriptLanguageDetection`)
+  and `/transcripts?language=de` filters on the former. Related filter rule: on music Whisper reads the
+  profanity prompt back ("pojebane, pojebane, pojebane", "shit, bitch, shit, bitch"), so `TranscriptFilter`
+  drops prompt echoes (same prompt word 3x, or >= 4 words at least half from `WhisperWorker.ProfanityVocabulary`).
   **Persistence lives in the Api**, not the transcriber: `LiveTranscriptConsumer` (shared durable
   queue `kickgateway-live-transcripts`, binds every slug) stores each slice in `LiveTranscripts`
   (`LiveTranscriptRecord`, migration `AddLiveTranscripts`), idempotent via `DedupeKey` =

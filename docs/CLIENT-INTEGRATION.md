@@ -220,7 +220,8 @@ one `TailoredApps.KickGateway.Contracts.Realtime.Media.LiveTranscript` per ~15 s
 | `Segments[]` | the individual Whisper segments (`StartedAt`, `EndedAt`, `Text`, `Confidence`) |
 | `StartedAt` / `EndedAt` | **estimated** UTC stream time (from segment duration + capture time, ± one HLS segment) |
 | `AudioStartSeconds` / `AudioSeconds` | position and length on the transcriber's per-channel audio clock (ordering / gap detection) |
-| `Language` | ISO-639-1 — configured, or detected when the transcriber runs in `auto` mode |
+| `Language` | ISO-639-1 the slice was transcribed in — the channel's current language (detected per chunk among the configured candidates, switched only on a confident reading), or the configured one |
+| `DetectedLanguage` / `LanguageProbability` | what the detector heard on this slice and how sure it was (0..1); `null` when detection did not run. Can differ from `Language` when an unsure reading kept the previous language |
 | `Confidence` | average token probability 0..1 (0 = unknown) |
 | `FirstMediaSequence` / `LastMediaSequence` | the HLS segments that contributed |
 | `Model`, `TranscribedAt`, `ProcessingSeconds` | provenance + how far behind live the text runs |

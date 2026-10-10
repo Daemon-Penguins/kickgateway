@@ -22,7 +22,8 @@ builder.Services.AddSingleton(opts);
 builder.Services.AddSingleton<TranscriptionCoordinator>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<TranscriptionCoordinator>());
 builder.Services.AddSingleton<WhisperModelProvider>();
-builder.Services.AddSingleton(new TranscriptFilter(opts.MinConfidence, opts.SuppressPhrases));
+builder.Services.AddSingleton(new TranscriptFilter(opts.MinConfidence, opts.SuppressPhrases,
+    promptWords: opts.Uncensored ? WhisperWorker.ProfanityVocabulary : []));
 builder.Services.AddHostedService<WhisperWorker>();
 
 // Sinks: files (default temp/kickgateway-transcripts) and/or the bus.
@@ -101,7 +102,7 @@ catch (Exception ex)
 
 log.LogInformation("Transcriber starting — channels: {Channels}; queue '{Queue}'; model {Model} ({Dir}); GPU {Gpu}; language {Lang}; files → {Files}; bus publish {Bus}",
     opts.Channels.Length == 0 ? "ALL" : string.Join(",", opts.Channels),
-    opts.QueueName, models.ModelName, models.ModelDirectory, opts.UseGpu, opts.Language,
+    opts.QueueName, models.ModelName, models.ModelDirectory, opts.UseGpu, opts.DescribeLanguageMode(),
     outputDir ?? "(off)", opts.PublishToBus);
 
 await host.RunAsync();

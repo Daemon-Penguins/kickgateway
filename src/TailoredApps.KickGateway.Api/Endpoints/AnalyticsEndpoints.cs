@@ -146,14 +146,14 @@ public static class AnalyticsEndpoints
         });
 
         // Live speech-to-text stored from Subscribers.Transcriber (see docs/CHAT-ANALYTICS.md).
-        g.MapGet("/channels/{slug}/transcripts", async (string slug, string? from, string? to, string? q, string? cursor, int? limit,
+        g.MapGet("/channels/{slug}/transcripts", async (string slug, string? from, string? to, string? q, string? language, string? cursor, int? limit,
             ClaimsPrincipal user, KickGatewayDbContext db, IOptions<ChatAnalyticsOptions> o, CancellationToken ct) =>
         {
             if (!AnalyticsTime.TryResolveWindow(from, to, o.Value.DefaultWindowDays, DateTime.UtcNow, out var window, out var err)) return Bad(err);
             var scope = await AnalyticsScope.ForUserAsync(user, db, ct);
             var channel = Slug(slug);
             if (!scope.Allows(channel)) return ChannelNotFound(channel);
-            return Json(await TranscriptQueries.PageAsync(db, channel, window, q, cursor, Math.Clamp(limit ?? 100, 1, 500), ct));
+            return Json(await TranscriptQueries.PageAsync(db, channel, window, q, language, cursor, Math.Clamp(limit ?? 100, 1, 500), ct));
         });
 
         // What was being said at a given moment (e.g. the CreatedAt of a chat message), +/- tolerance seconds.

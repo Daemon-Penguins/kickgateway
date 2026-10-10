@@ -14,8 +14,74 @@ public sealed class TranscriberOptions
     /// </summary>
     public string QueueName { get; set; } = "transcriber";
 
-    /// <summary>Whisper language code (<c>pl</c>, <c>en</c>, …) or <c>auto</c> for per-chunk detection.</summary>
+    /// <summary>
+    /// Starting / fallback language (ISO-639-1, e.g. <c>pl</c>): every channel is transcribed in it until the
+    /// detector is confident about another candidate from <see cref="Languages"/>, and it is the fixed language
+    /// when that list is empty. <c>auto</c> = Whisper's own unrestricted per-chunk detection (no candidate list,
+    /// no stickiness; the language is whatever Whisper picked for the chunk).
+    /// </summary>
     public string Language { get; set; } = "pl";
+
+    /// <summary>
+    /// Comma-separated candidate languages for per-chunk detection, e.g. <c>pl,en,de</c>. Each chunk first goes
+    /// through Whisper's language detector restricted to these codes (one extra encoder pass, ~0.5 s on a GPU);
+    /// a confident reading (<see cref="LanguageSwitchMinProbability"/>) switches the channel to that language,
+    /// an unsure one keeps the channel's current language (see <c>LanguageTracker</c>). The transcript carries
+    /// both the language used and what was detected. Empty = no detection, fixed <see cref="Language"/>.
+    /// </summary>
+    public string Languages { get; set; } = "pl,en,de";
+
+    /// <summary>
+    /// Detector probability (0..1) a reading needs to count towards a switch. Measured on live streams:
+    /// background music and Whisper's silence fillers ("I'm sorry.") get 0.6–0.9 for the wrong language,
+    /// genuine speech 0.8–0.99 — hence 0.7 together with <see cref="LanguageSwitchConfirmChunks"/>.
+    /// </summary>
+    public float LanguageSwitchMinProbability { get; set; } = 0.7f;
+
+    /// <summary>
+    /// How many consecutive chunks must confidently report the same other language before the channel
+    /// switches to it. 1 = switch on the first confident chunk (reactive but flappy on music/clips);
+    /// 2 (default) ignores one-off chunks and costs a genuine switch one chunk (~15 s) in the old language.
+    /// </summary>
+    public int LanguageSwitchConfirmChunks { get; set; } = 2;
+
+    /// <summary><see cref="Language"/> is <c>auto</c> (Whisper's unrestricted detection).</summary>
+    public bool IsAutoLanguage => string.Equals(Language?.Trim(), "auto", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Candidate codes parsed from <see cref="Languages"/> (lowercase, distinct, in the given order), with the
+    /// fallback language added when it is a code and missing from the list. Empty = detection off.
+    /// </summary>
+    public string[] CandidateLanguages
+    {
+        get
+        {
+            var list = (Languages ?? "")
+                .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(l => l.ToLowerInvariant())
+                .Distinct()
+                .ToList();
+            if (list.Count > 0 && !IsAutoLanguage)
+            {
+                var fallback = (Language ?? "").Trim().ToLowerInvariant();
+                if (fallback.Length > 0 && !list.Contains(fallback)) list.Insert(0, fallback);
+            }
+            return list.ToArray();
+        }
+    }
+
+    /// <summary>Candidate-restricted detection with a sticky per-channel language is on.</summary>
+    public bool DetectsLanguage => CandidateLanguages.Length > 0;
+
+    /// <summary>Language a channel starts in and falls back to while detection is unsure (first candidate when <see cref="Language"/> is <c>auto</c>).</summary>
+    public string FallbackLanguage => IsAutoLanguage
+        ? (CandidateLanguages.FirstOrDefault() ?? "auto")
+        : (Language ?? "").Trim().ToLowerInvariant();
+
+    /// <summary>One-line description of the language setup for the startup log.</summary>
+    public string DescribeLanguageMode() => DetectsLanguage
+        ? $"{FallbackLanguage}, detecting among {string.Join(",", CandidateLanguages)} (switch after {LanguageSwitchConfirmChunks} chunk(s) at p>={LanguageSwitchMinProbability.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)})"
+        : IsAutoLanguage ? "auto (Whisper picks per chunk)" : $"{Language} (fixed)";
 
     /// <summary><c>Whisper.net.Ggml.GgmlType</c> name, e.g. <c>LargeV3Turbo</c>, <c>Medium</c>, <c>Small</c>, <c>Base</c>.</summary>
     public string Model { get; set; } = "LargeV3Turbo";
@@ -147,6 +213,11 @@ public sealed class TranscriberOptions
     {
         if (string.IsNullOrWhiteSpace(QueueName)) throw new ArgumentException("Transcriber:QueueName must not be empty.");
         if (string.IsNullOrWhiteSpace(Language)) throw new ArgumentException("Transcriber:Language must be a language code or 'auto'.");
+        if (!IsAutoLanguage && !IsLanguageCode(Language.Trim().ToLowerInvariant())) throw new ArgumentException($"Transcriber:Language '{Language}' is not an ISO-639-1 code (pl, en, de, ...) or 'auto'.");
+        foreach (var code in CandidateLanguages)
+            if (!IsLanguageCode(code)) throw new ArgumentException($"Transcriber:Languages contains '{code}' — use comma-separated ISO-639-1 codes like pl,en,de.");
+        if (LanguageSwitchMinProbability is <= 0 or > 1) throw new ArgumentException("Transcriber:LanguageSwitchMinProbability must be within (0, 1].");
+        if (LanguageSwitchConfirmChunks is < 1 or > 10) throw new ArgumentException("Transcriber:LanguageSwitchConfirmChunks must be between 1 and 10.");
         if (ChunkSeconds is < 3 or > 30) throw new ArgumentException("Transcriber:ChunkSeconds must be between 3 and 30 (Whisper's window is 30 s).");
         if (MinChunkSeconds < 0 || MinChunkSeconds >= ChunkSeconds) throw new ArgumentException("Transcriber:MinChunkSeconds must be >= 0 and below ChunkSeconds.");
         if (IdleFlushSeconds <= 0) throw new ArgumentException("Transcriber:IdleFlushSeconds must be positive.");
@@ -156,4 +227,7 @@ public sealed class TranscriberOptions
         if (BeamSize < 0) throw new ArgumentException("Transcriber:BeamSize must be 0 (greedy) or positive.");
         if (string.IsNullOrWhiteSpace(FfmpegPath)) throw new ArgumentException("Transcriber:FfmpegPath must not be empty.");
     }
+
+    /// <summary>Whisper's language ids are 2–3 lowercase ASCII letters (<c>pl</c>, <c>en</c>, <c>yue</c>, …).</summary>
+    private static bool IsLanguageCode(string code) => code.Length is 2 or 3 && code.All(char.IsAsciiLetterLower);
 }

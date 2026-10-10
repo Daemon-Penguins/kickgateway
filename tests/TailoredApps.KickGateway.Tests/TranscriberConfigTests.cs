@@ -54,4 +54,88 @@ public class TranscriberConfigTests
         var opts = new TranscriberOptions { IdleFlushSeconds = 30, SessionTimeoutSeconds = 10 };
         Assert.Throws<ArgumentException>(() => opts.Validate());
     }
+
+    [Fact]
+    public void Default_language_setup_detects_among_pl_en_de_with_pl_as_fallback()
+    {
+        var opts = new TranscriberOptions();
+        Assert.True(opts.DetectsLanguage);
+        Assert.False(opts.IsAutoLanguage);
+        Assert.Equal(["pl", "en", "de"], opts.CandidateLanguages);
+        Assert.Equal("pl", opts.FallbackLanguage);
+        Assert.Contains("detecting among pl,en,de", opts.DescribeLanguageMode());
+        Assert.Equal("pl, detecting among pl,en,de (switch after 2 chunk(s) at p>=0.70)", opts.DescribeLanguageMode());
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(11)]
+    public void Confirmation_chunks_must_be_between_one_and_ten(int chunks)
+    {
+        var opts = new TranscriberOptions { LanguageSwitchConfirmChunks = chunks };
+        Assert.Throws<ArgumentException>(() => opts.Validate());
+    }
+
+    [Fact]
+    public void Candidate_list_is_parsed_loosely_and_always_contains_the_fallback()
+    {
+        var opts = new TranscriberOptions { Language = "EN", Languages = " de ; PL,de " };
+        Assert.Equal(["en", "de", "pl"], opts.CandidateLanguages); // fallback first, duplicates and case folded
+        Assert.Equal("en", opts.FallbackLanguage);
+        opts.Validate();
+    }
+
+    [Fact]
+    public void Empty_candidate_list_means_a_fixed_language()
+    {
+        var opts = new TranscriberOptions { Language = "pl", Languages = "" };
+        Assert.False(opts.DetectsLanguage);
+        Assert.Empty(opts.CandidateLanguages);
+        Assert.Equal("pl (fixed)", opts.DescribeLanguageMode());
+        opts.Validate();
+    }
+
+    [Fact]
+    public void Auto_with_candidates_falls_back_to_the_first_candidate()
+    {
+        var opts = new TranscriberOptions { Language = "auto", Languages = "de,pl" };
+        Assert.True(opts.IsAutoLanguage);
+        Assert.True(opts.DetectsLanguage);
+        Assert.Equal(["de", "pl"], opts.CandidateLanguages);
+        Assert.Equal("de", opts.FallbackLanguage);
+        opts.Validate();
+
+        var plainAuto = new TranscriberOptions { Language = "auto", Languages = "" };
+        Assert.False(plainAuto.DetectsLanguage);
+        Assert.Equal("auto (Whisper picks per chunk)", plainAuto.DescribeLanguageMode());
+        plainAuto.Validate();
+    }
+
+    [Theory]
+    [InlineData("polish")]
+    [InlineData("pl,german")]
+    [InlineData("pl,e1")]
+    public void Candidate_codes_must_be_iso_639_1(string languages)
+    {
+        var opts = new TranscriberOptions { Languages = languages };
+        var ex = Assert.Throws<ArgumentException>(() => opts.Validate());
+        Assert.Contains("Transcriber:Languages", ex.Message);
+    }
+
+    [Fact]
+    public void Fallback_language_must_be_a_code_or_auto()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => new TranscriberOptions { Language = "polish" }.Validate());
+        Assert.Contains("Transcriber:Language", ex.Message);
+    }
+
+    [Theory]
+    [InlineData(0f)]
+    [InlineData(1.01f)]
+    [InlineData(-0.5f)]
+    public void Switch_probability_must_be_within_zero_exclusive_to_one(float p)
+    {
+        var opts = new TranscriberOptions { LanguageSwitchMinProbability = p };
+        Assert.Throws<ArgumentException>(() => opts.Validate());
+    }
 }
