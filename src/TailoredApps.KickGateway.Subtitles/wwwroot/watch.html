@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>z napisami</title>
+<link rel="stylesheet" href="/_/watch.css">
+</head>
+<body>
+<div id="stage" class="stage">
+  <iframe id="player" class="player" title="Kick player" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen scrolling="no" frameborder="0"></iframe>
+
+  <div id="captions" class="captions" aria-live="polite">
+    <div id="prev" class="line prev"></div>
+    <div id="cur" class="line cur"></div>
+  </div>
+
+  <div id="hud" class="hud">
+    <div class="hud-left">
+      <span id="status" class="dot connecting" title="łączenie…"></span>
+      <span id="title" class="slug"></span>
+      <span id="lag" class="lag" title="o ile napisy są za dźwiękiem (pomiar na bramce; player ma własny bufor)"></span>
+    </div>
+    <div class="hud-right">
+      <select id="track" title="ścieżka napisów">
+        <option value="original">oryginał</option>
+        <option value="pl" disabled>polski (wkrótce)</option>
+      </select>
+      <button id="smaller" title="mniejsze napisy">A−</button>
+      <button id="bigger" title="większe napisy">A+</button>
+      <button id="tags" title="pokaż / ukryj znacznik języka">[pl]</button>
+      <button id="history" title="historia">☰</button>
+      <button id="fullscreen" title="pełny ekran (z napisami)">⛶</button>
+    </div>
+  </div>
+
+  <aside id="panel" class="panel hidden">
+    <header><span>Ostatnie wypowiedzi</span><button id="close-panel" title="zamknij">×</button></header>
+    <ol id="log"></ol>
+  </aside>
+</div>
+<script src="/_/watch.js"></script>
+</body>
+</html>

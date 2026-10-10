@@ -23,6 +23,7 @@ env:
   CLIPS_FETCHER_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-clips-fetcher
   MCP_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-mcp
   TRANSCRIBER_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-transcriber
+  SUBTITLES_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-subtitles
 
 jobs:
   build-and-push:
@@ -90,6 +91,18 @@ jobs:
             ${{ env.MCP_IMAGE }}:${{ github.sha }}
           cache-from: type=gha,scope=mcp
           cache-to: type=gha,scope=mcp,mode=max
+
+      - name: Build & push Subtitles image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/TailoredApps.KickGateway.Subtitles/Dockerfile
+          push: true
+          tags: |
+            ${{ env.SUBTITLES_IMAGE }}:latest
+            ${{ env.SUBTITLES_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha,scope=subtitles
+          cache-to: type=gha,scope=subtitles,mode=max
 
       - name: Build & push Transcriber image
         uses: docker/build-push-action@v6
@@ -248,6 +261,37 @@ jobs:
                 - "traefik.http.services.kickgateway-mcp.loadbalancer.server.port=8080"
                 - "traefik.docker.network=traefik-public"
 
+            # Live-subtitles site (OPT-IN via SUBTITLES_ENABLED + SUBTITLES_HOST): https://${SUBTITLES_HOST}/{slug}
+            # embeds Kick's own player and overlays the channel's LiveTranscript stream as captions (SSE).
+            # Video never flows through the VPS (Kick's CDN only serves browsers from kick.com origins, so the
+            # iframe is the only option anyway); this container only relays text. Separate hostname → its
+            # own Traefik router + certificate. SUBTITLES_CHANNELS (comma-separated slugs) limits the pages
+            # served and the transcripts received; empty = any channel.
+            subtitles:
+              image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-subtitles:${IMAGE_TAG:-latest}
+              profiles: ["subtitles"]
+              restart: unless-stopped
+              environment:
+                - ASPNETCORE_ENVIRONMENT=Production
+                - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
+                - RabbitMq__Port=${RABBITMQ_PORT:-5672}
+                - RabbitMq__VirtualHost=${RABBITMQ_VHOST:-/}
+                - RabbitMq__Username=${RABBITMQ_USERNAME:-}
+                - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
+                - Subtitles__Channels=${SUBTITLES_CHANNELS:-}
+              networks:
+                - default
+                - traefik-public
+              labels:
+                - "traefik.enable=true"
+                - "traefik.http.routers.kickgateway-subtitles.rule=Host(`${SUBTITLES_HOST}`)"
+                - "traefik.http.routers.kickgateway-subtitles.entrypoints=websecure"
+                - "traefik.http.routers.kickgateway-subtitles.tls=true"
+                - "traefik.http.routers.kickgateway-subtitles.tls.certresolver=letsencrypt-dns"
+                - "traefik.http.routers.kickgateway-subtitles.tls.domains[0].main=${SUBTITLES_HOST}"
+                - "traefik.http.services.kickgateway-subtitles.loadbalancer.server.port=8080"
+                - "traefik.docker.network=traefik-public"
+
             # Live speech-to-text, CPU only (no GPU on the VPS), OPT-IN. Consumes LiveVideoSegment - so it only
             # works while REALTIME_VIDEO_ENABLED=true and a channel is live - and publishes LiveTranscript,
             # which the api stores in LiveTranscripts. Default model LargeV3Turbo (best Polish quality; the
@@ -305,6 +349,11 @@ jobs:
             /tmp/docker-compose.prod.yml \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/apps/kickgateway/docker-compose.yml
 
+          # Opt-in compose profiles (comma-separated when several are on).
+          PROFILES=""
+          [ "${{ vars.TRANSCRIBER_ENABLED }}" = "true" ] && PROFILES="transcriber"
+          [ "${{ vars.SUBTITLES_ENABLED }}" = "true" ] && PROFILES="${PROFILES:+$PROFILES,}subtitles"
+
           # Write .env with secrets
           $SSH_CMD "cat > /opt/apps/kickgateway/.env << 'ENVFILE'
           IMAGE_TAG=${{ github.sha }}
@@ -320,7 +369,9 @@ jobs:
           CLIPS_FETCHER_SECRET=${{ secrets.CLIPS_FETCHER_SECRET }}
           ANALYTICS_API_KEY=${{ secrets.ANALYTICS_API_KEY }}
           REALTIME_VIDEO_ENABLED=${{ vars.REALTIME_VIDEO_ENABLED }}
-          COMPOSE_PROFILES=${{ vars.TRANSCRIBER_ENABLED == 'true' && 'transcriber' || '' }}
+          COMPOSE_PROFILES=$PROFILES
+          SUBTITLES_HOST=${{ secrets.SUBTITLES_HOST }}
+          SUBTITLES_CHANNELS=${{ vars.SUBTITLES_CHANNELS }}
           TRANSCRIBER_MODEL=${{ vars.TRANSCRIBER_MODEL }}
           TRANSCRIBER_QUANTIZATION=${{ vars.TRANSCRIBER_QUANTIZATION }}
           TRANSCRIBER_LANGUAGE=${{ vars.TRANSCRIBER_LANGUAGE }}
@@ -345,6 +396,9 @@ jobs:
           # transcriber off explicitly when TRANSCRIBER_ENABLED is not 'true'.
           if [ "${{ vars.TRANSCRIBER_ENABLED }}" != "true" ]; then
             $SSH_CMD "cd /opt/apps/kickgateway && docker compose --profile transcriber rm -s -f transcriber >/dev/null 2>&1 || true"
+          fi
+          if [ "${{ vars.SUBTITLES_ENABLED }}" != "true" ]; then
+            $SSH_CMD "cd /opt/apps/kickgateway && docker compose --profile subtitles rm -s -f subtitles >/dev/null 2>&1 || true"
           fi
 
           # Verify

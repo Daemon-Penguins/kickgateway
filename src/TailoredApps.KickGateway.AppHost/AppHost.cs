@@ -56,6 +56,16 @@ builder.AddProject<Projects.TailoredApps_KickGateway_Worker>("kickgateway-worker
     .WithEnvironment("RabbitMq__Username", rabbit.Resource.UserNameParameter!)
     .WithEnvironment("RabbitMq__Password", rabbit.Resource.PasswordParameter);
 
+// Live-subtitles site: /{slug} = Kick's embedded player + the channel's LiveTranscript stream as captions (SSE).
+// Only useful while a transcriber publishes (locally: run the Transcriber project / the Mac mini).
+builder.AddProject<Projects.TailoredApps_KickGateway_Subtitles>("kickgateway-subtitles")
+    .WithReference(rabbit)
+    .WaitFor(rabbit)
+    .WithEnvironment("RabbitMq__Host", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Host))
+    .WithEnvironment("RabbitMq__Port", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Port))
+    .WithEnvironment("RabbitMq__Username", rabbit.Resource.UserNameParameter!)
+    .WithEnvironment("RabbitMq__Password", rabbit.Resource.PasswordParameter);
+
 // Live-video capture: ON by default in dev so you can see LiveVideoSegment flowing without extra
 // setup (in dev you typically have only a channel or two). Set REALTIME_VIDEO_ENABLED=false to turn
 // it off — it's heavy (continuous HLS pull per live channel). Prod is governed separately

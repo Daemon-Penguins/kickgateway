@@ -23,6 +23,7 @@ src/
   TailoredApps.KickGateway.Worker/            # Sample subscriber, all channels (logs every contract). Dockerfile here.
   TailoredApps.KickGateway.Subscribers.*/     # Sample apps demonstrating per-channel filtering (+ VideoRecorder).
   TailoredApps.KickGateway.Subscribers.Transcriber/ # Live-stream speech-to-text (ffmpeg + Whisper) -> LiveTranscript. Dockerfile here.
+  TailoredApps.KickGateway.Subtitles/         # Live-subtitles site: /{slug} = Kick's player + LiveTranscript captions over SSE. Dockerfile here.
   TailoredApps.KickGateway.AppHost/           # .NET Aspire orchestrator (F5 from VS).
   TailoredApps.KickGateway.ServiceDefaults/   # OTel + health + resilience.
 docker/docker-compose.yml                     # RabbitMQ + SQL Server (dev fallback).
@@ -227,6 +228,8 @@ push) returns to the pipeline-managed version.
 | `TRANSCRIBER_LANGUAGE_CONFIRM_CHUNKS` | Optional. Consecutive confident chunks of the same other language before a channel switches, default `2` (one-off chunks of music or a clip never flip it; a genuine switch lags one chunk). |
 | `TRANSCRIBER_THREADS` | Optional. Whisper CPU threads, default `0` = auto (cores minus 2, clamped 4..16). |
 | `TRANSCRIBER_WRITE_FILES` | Optional. `true` also appends per-channel `.txt`/`.jsonl` files into the `transcriber-transcripts` volume. Default `false` - the api's `LiveTranscripts` table is the record. |
+| `SUBTITLES_ENABLED` | Optional. `true` runs the `subtitles` container (compose profile): the live-subtitles site at `https://${SUBTITLES_HOST}/{slug}`. Needs the `SUBTITLES_HOST` secret and a transcriber publishing somewhere. |
+| `SUBTITLES_CHANNELS` | Optional. Comma-separated slugs the subtitles site serves (and the only transcripts it receives). Empty = any channel. |
 
 **Secrets** (Settings → Secrets and variables → Actions → Secrets):
 
@@ -235,6 +238,7 @@ push) returns to the pipeline-managed version.
 | `DOCKERHUB_USER` / `DOCKERHUB_TOKEN` | push to Docker Hub |
 | `DEPLOY_HOST` / `DEPLOY_USER` / `DEPLOY_SSH_KEY` | SSH into the VPS |
 | `PUBLIC_HOST` | Fully qualified hostname for the public URL (`example.com`) |
+| `SUBTITLES_HOST` | Optional (with `SUBTITLES_ENABLED`). Hostname of the live-subtitles site (`subtitles.example.com`); needs its own DNS A record → VPS, Traefik issues the certificate. |
 | `KICK_WEBHOOK_URL` | Full webhook URL Kick will POST to (`https://example.com/api/webhooks/kick`) |
 | `DB_CONNECTION_STRING` | `Server=…,1433;Database=kickgateway;User Id=…;Password=…;TrustServerCertificate=true;Encrypt=false` |
 | `RABBITMQ_HOST` / `RABBITMQ_PORT` / `RABBITMQ_VHOST` / `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | broker (private vhost recommended) |
@@ -385,6 +389,29 @@ response. The gateway fetches them from the Cloudflare-protected website API
 through the clips-fetcher sidecar. A live snapshot also carries `LiveVodUrl` — the watch link
 of the broadcast in progress — and every `ChannelVideo` has a ready-made `WatchUrl`; never build
 VOD links from the legacy `VideoUuid` (404). See `docs/CLIENT-INTEGRATION.md`.
+
+## Live subtitles site
+
+`TailoredApps.KickGateway.Subtitles` is a small site that shows a channel's live transcripts as captions
+over the stream: `GET /{slug}` embeds **Kick's own player** (`player.kick.com`) and overlays the
+channel's `LiveTranscript` stream, pushed to the page over Server-Sent Events (`GET /{slug}/events`,
+resumable via `Last-Event-ID`; `GET /{slug}/recent` returns the same backlog as JSON). No database,
+no video: Kick's CDN only serves browsers from kick.com origins (CORS policy baked into the playback
+token), so a self-hosted player is not an option and the iframe is the honest zero-transfer choice.
+The caption trails the picture by roughly `ChunkSeconds` + inference − the player's buffer, i.e.
+~2–4 s with `Transcriber__ChunkSeconds=5`; the page shows the measured lag. Query flags:
+`?overlay=1` (transparent captions only — an OBS browser source over the real stream) and
+`?muted=false`. The page is public like `/obs/clips`; `Subtitles__Channels` restricts it to an
+allowlist (and to those channels' transcripts). Deployed as the opt-in `subtitles` container on its
+own hostname (`SUBTITLES_ENABLED` + `SUBTITLES_HOST`), or locally:
+
+```pwsh
+dotnet run --project src/TailoredApps.KickGateway.Subtitles   # http://localhost:5xxx/{slug}
+```
+
+The event JSON carries `language`, `detectedLanguage`, `languageProbability`, `confidence`, the
+segments and an empty `translations` slot — the planned translation layer fills it per target
+language and the page's track selector switches between the original and the translation.
 
 ## Notes
 

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>z napisami</title>
+<link rel="stylesheet" href="/_/watch.css">
+</head>
+<body class="home">
+<main class="home-card">
+  <h1>z napisami</h1>
+  <p class="muted">Stream z Kicka z napisami na żywo. Wpisz nazwę kanału albo wybierz z listy.</p>
+  <form id="go" autocomplete="off">
+    <input id="slug" name="slug" placeholder="np. chef_jan" pattern="[A-Za-z0-9_-]{1,64}" required autofocus>
+    <button type="submit">Oglądaj</button>
+  </form>
+  <ul id="channels" class="channels"></ul>
+  <p class="muted small">Napisy pojawiają się kilka sekund po słowach. Dodaj <code>?overlay=1</code>, żeby dostać same napisy na przezroczystym tle (np. jako browser source w OBS).</p>
+</main>
+<script>
+document.getElementById('go').addEventListener('submit', e => {
+  e.preventDefault();
+  const slug = document.getElementById('slug').value.trim().toLowerCase();
+  if (slug) location.href = '/' + encodeURIComponent(slug);
+});
+fetch('/_/channels').then(r => r.json()).then(({ active, allowed }) => {
+  const list = document.getElementById('channels');
+  const slugs = [...new Set([...(active || []), ...(allowed || [])])].sort();
+  for (const s of slugs) {
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.href = '/' + encodeURIComponent(s);
+    a.textContent = s + ((active || []).includes(s) ? ' · na żywo' : '');
+    li.appendChild(a);
+    list.appendChild(li);
+  }
+}).catch(() => {});
+</script>
+</body>
+</html>
