@@ -41,13 +41,13 @@ public class VideoRelayTests
         Data = TsBytes(packets),
     };
 
-    private static (VideoRelay relay, FakeTime time, RelayOptions opts) Relay(int bufferSeconds = 90, int maxMb = 64, int maxViewers = 2, string[]? channels = null)
+    private static (VideoRelay relay, FakeTime time, RelayOptions opts) Relay(int bufferSeconds = 90, int maxMb = 64, int maxViewers = 2, string? channels = null)
     {
         var maxDelay = Math.Max(0, bufferSeconds - 10);
         var opts = new RelayOptions
         {
             Token = "0123456789abcdef0123", BufferSeconds = bufferSeconds, MaxBufferMegabytesPerChannel = maxMb, MaxViewersPerChannel = maxViewers,
-            ViewerIdleSeconds = 15, Channels = channels ?? [], MaxDelaySeconds = maxDelay, DefaultDelaySeconds = Math.Min(15, maxDelay),
+            ViewerIdleSeconds = 15, Channels = channels ?? "", MaxDelaySeconds = maxDelay, DefaultDelaySeconds = Math.Min(15, maxDelay),
         };
         opts.Validate();
         var time = new FakeTime(new DateTimeOffset(T0, TimeSpan.Zero));
@@ -110,7 +110,7 @@ public class VideoRelayTests
     [Fact]
     public void Unusable_or_foreign_segments_are_dropped()
     {
-        var (relay, _, _) = Relay(channels: ["alpha"]);
+        var (relay, _, _) = Relay(channels: "alpha");
         Assert.False(relay.Ingest(Seg("beta", 1)));           // not relayed
         Assert.False(relay.Ingest(Seg("bad slug", 1)));
         Assert.False(relay.Ingest(Seg("alpha", 1) with { Data = [] }));

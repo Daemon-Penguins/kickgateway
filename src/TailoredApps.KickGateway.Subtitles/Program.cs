@@ -34,6 +34,7 @@ if (relayOpts.Enabled) builder.Services.AddHostedService<RelayStatsLogger>();
 builder.Services.AddMassTransit(x =>
 {
     x.AddConsumer<LiveTranscriptConsumer>();
+    x.AddConsumer<TranslationConsumer>();
     if (relayOpts.Enabled) x.AddConsumer<LiveVideoSegmentConsumer>();
 
     x.UsingRabbitMq((ctx, cfg) =>
@@ -58,6 +59,20 @@ builder.Services.AddMassTransit(x =>
 
             KickMediaTopology.BindLiveTranscript(e, opts.NormalizedChannels); // no slugs → every channel
             e.ConfigureConsumer<LiveTranscriptConsumer>(ctx);
+        });
+
+        // Translations (Subscribers.Translator) land on the transcript they belong to and go out as `translation` events.
+        cfg.ReceiveEndpoint(opts.EffectiveQueueName + "-translations", e =>
+        {
+            e.Durable = false;
+            e.AutoDelete = true;
+            e.DiscardFaultedMessages();
+            e.DiscardSkippedMessages();
+            e.ConfigureConsumeTopology = false;
+            e.PrefetchCount = 32;
+
+            KickMediaTopology.BindLiveTranscriptTranslation(e, opts.NormalizedChannels);
+            e.ConfigureConsumer<TranslationConsumer>(ctx);
         });
 
         if (relayOpts.Enabled)

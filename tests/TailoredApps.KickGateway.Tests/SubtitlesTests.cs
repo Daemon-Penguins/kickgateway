@@ -70,7 +70,7 @@ public class SubtitlesTests
         var any = new SubtitlesOptions();
         Assert.True(any.Allows("whoever"));
 
-        var some = new SubtitlesOptions { Channels = ["Chef_Jan", " trazer "] };
+        var some = new SubtitlesOptions { Channels = "Chef_Jan, trazer ;chef_jan" };
         Assert.Equal(["chef_jan", "trazer"], some.NormalizedChannels);
         Assert.True(some.Allows("chef_jan"));
         Assert.False(some.Allows("whoever"));
@@ -91,7 +91,7 @@ public class SubtitlesTests
     [Fact]
     public void Invalid_options_are_rejected()
     {
-        Assert.Throws<ArgumentException>(() => new SubtitlesOptions { Channels = ["bad.slug"] }.Validate());
+        Assert.Throws<ArgumentException>(() => new SubtitlesOptions { Channels = "bad.slug" }.Validate());
         Assert.Throws<ArgumentException>(() => new SubtitlesOptions { KeepAliveSeconds = 0 }.Validate());
         Assert.Throws<ArgumentException>(() => new SubtitlesOptions { BacklogSeconds = -1 }.Validate());
     }
@@ -160,7 +160,7 @@ public class SubtitlesTests
         var enumerator = feed.SubscribeAsync("alpha", afterId: 0, cts.Token).GetAsyncEnumerator(cts.Token);
 
         Assert.True(await enumerator.MoveNextAsync());
-        received.Add(enumerator.Current.Text);
+        received.Add(enumerator.Current.Event.Text);
         Assert.Equal(1, feed.SubscriberCount("alpha"));
 
         feed.Publish(Transcript("alpha", 12, "live 1"));
@@ -168,11 +168,11 @@ public class SubtitlesTests
         feed.Publish(Transcript("alpha", 24, "live 2"));
 
         Assert.True(await enumerator.MoveNextAsync());
-        received.Add(enumerator.Current.Text);
+        received.Add(enumerator.Current.Event.Text);
         Assert.True(await enumerator.MoveNextAsync());
-        received.Add(enumerator.Current.Text);
+        received.Add(enumerator.Current.Event.Text);
         Assert.Equal(["before", "live 1", "live 2"], received);
-        Assert.Equal([1L, 2L, 3L], new[] { 1L, enumerator.Current.Id - 1, enumerator.Current.Id });
+        Assert.Equal([1L, 2L, 3L], new[] { 1L, enumerator.Current.Event.Id - 1, enumerator.Current.Event.Id });
 
         cts.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await enumerator.MoveNextAsync());
@@ -189,7 +189,7 @@ public class SubtitlesTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         var enumerator = feed.SubscribeAsync("alpha", afterId: 2, cts.Token).GetAsyncEnumerator(cts.Token);
         Assert.True(await enumerator.MoveNextAsync());
-        Assert.Equal("line 3", enumerator.Current.Text);
+        Assert.Equal("line 3", enumerator.Current.Event.Text);
         cts.Cancel();
         await enumerator.DisposeAsync();
     }

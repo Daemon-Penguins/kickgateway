@@ -83,3 +83,52 @@ public class LiveTranscriptRecord
     public static string BuildDedupeKey(string slug, DateTime startedAt, double audioStartSeconds) =>
         $"{slug}|{startedAt.Ticks}|{audioStartSeconds.ToString("F3", CultureInfo.InvariantCulture)}";
 }
+
+/// <summary>
+/// A translation of one <see cref="LiveTranscriptRecord"/> slice into another language, as published by
+/// <c>Subscribers.Translator</c> (<c>Contracts.Realtime.Media.LiveTranscriptTranslation</c>). Keyed on the
+/// transcript's <see cref="TranscriptDedupeKey"/> + <see cref="TargetLanguage"/>; no foreign key, because the
+/// transcript row is a separate best-effort stream that may land later (or not at all).
+/// </summary>
+public class LiveTranscriptTranslationRecord
+{
+    public long Id { get; set; }
+
+    /// <summary><see cref="LiveTranscriptRecord.DedupeKey"/> of the slice this translates.</summary>
+    [MaxLength(200)]
+    public string TranscriptDedupeKey { get; set; } = "";
+
+    [MaxLength(120)]
+    public string ChannelSlug { get; set; } = "";
+
+    public DateTime StartedAt { get; set; }
+
+    public DateTime EndedAt { get; set; }
+
+    public double AudioStartSeconds { get; set; }
+
+    [MaxLength(16)]
+    public string SourceLanguage { get; set; } = "";
+
+    [MaxLength(16)]
+    public string TargetLanguage { get; set; } = "";
+
+    /// <summary>Whole slice translated. Truncated to 4000 chars.</summary>
+    [MaxLength(4000)]
+    public string Text { get; set; } = "";
+
+    /// <summary>Translated segments with the source timings, same JSON shape as <see cref="LiveTranscriptRecord.SegmentsJson"/>.</summary>
+    public string SegmentsJson { get; set; } = "[]";
+
+    public int SegmentCount { get; set; }
+
+    /// <summary>Provider/model that produced it, e.g. <c>anthropic/claude-haiku-5-5</c>.</summary>
+    [MaxLength(120)]
+    public string Provider { get; set; } = "";
+
+    public DateTime TranslatedAt { get; set; }
+
+    public double ProcessingSeconds { get; set; }
+
+    public DateTime ReceivedAt { get; set; } = DateTime.UtcNow;
+}

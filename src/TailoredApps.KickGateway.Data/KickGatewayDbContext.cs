@@ -25,6 +25,7 @@ public class KickGatewayDbContext : DbContext
 
     // Live speech-to-text slices from Subscribers.Transcriber (LiveTranscriptConsumer). Not derived from the inboxes.
     public DbSet<LiveTranscriptRecord> LiveTranscripts => Set<LiveTranscriptRecord>();
+    public DbSet<LiveTranscriptTranslationRecord> LiveTranscriptTranslations => Set<LiveTranscriptTranslationRecord>();
 
     // Deterministic Guids for the bootstrap SuperAdmin so the EF migration is
     // reproducible. The username on the seeded row is a placeholder
@@ -202,6 +203,14 @@ public class KickGatewayDbContext : DbContext
             // Channel timelines and joins with chat by time window.
             b.HasIndex(x => new { x.ChannelSlug, x.StartedAt });
             b.HasIndex(x => new { x.ChannelSlug, x.EndedAt });
+        });
+
+        modelBuilder.Entity<LiveTranscriptTranslationRecord>(b =>
+        {
+            b.HasKey(x => x.Id);
+            // One translation per slice and target language (the consumer checks first, the index enforces it).
+            b.HasIndex(x => new { x.TranscriptDedupeKey, x.TargetLanguage }).IsUnique();
+            b.HasIndex(x => new { x.ChannelSlug, x.StartedAt });
         });
 
         // MassTransit transactional outbox + inbox tables — registered here so EF migrations create them.

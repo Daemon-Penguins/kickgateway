@@ -66,6 +66,19 @@ builder.AddProject<Projects.TailoredApps_KickGateway_Subtitles>("kickgateway-sub
     .WithEnvironment("RabbitMq__Username", rabbit.Resource.UserNameParameter!)
     .WithEnvironment("RabbitMq__Password", rabbit.Resource.PasswordParameter);
 
+// Translator: LiveTranscript (German by default) -> LLM -> LiveTranscriptTranslation (Polish). In dev it runs the
+// no-network stub provider unless TRANSLATOR_API_KEY is set (then Anthropic, model claude-haiku-5-5).
+var translatorKey = builder.Configuration["TRANSLATOR_API_KEY"];
+builder.AddProject<Projects.TailoredApps_KickGateway_Subscribers_Translator>("subscriber-translator")
+    .WithReference(rabbit)
+    .WaitFor(rabbit)
+    .WithEnvironment("RabbitMq__Host", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Host))
+    .WithEnvironment("RabbitMq__Port", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Port))
+    .WithEnvironment("RabbitMq__Username", rabbit.Resource.UserNameParameter!)
+    .WithEnvironment("RabbitMq__Password", rabbit.Resource.PasswordParameter)
+    .WithEnvironment("Translator__Llm__Provider", string.IsNullOrWhiteSpace(translatorKey) ? "stub" : "anthropic")
+    .WithEnvironment("Translator__Llm__ApiKey", translatorKey ?? "");
+
 // Live-video capture: ON by default in dev so you can see LiveVideoSegment flowing without extra
 // setup (in dev you typically have only a channel or two). Set REALTIME_VIDEO_ENABLED=false to turn
 // it off — it's heavy (continuous HLS pull per live channel). Prod is governed separately
