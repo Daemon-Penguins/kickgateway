@@ -230,6 +230,8 @@ jobs:
                 - Kick__ClipsFetcherSecret=${CLIPS_FETCHER_SECRET:-}
                 # Live-video capture is opt-in — set REALTIME_VIDEO_ENABLED=true to turn it on.
                 - Kick__Realtime__Video__Enabled=${REALTIME_VIDEO_ENABLED:-false}
+                # Highest rendition under this cap is captured (audio for the transcriber + the subtitles relay).
+                - Kick__Realtime__Video__MaxBitrateKbps=${REALTIME_VIDEO_MAX_BITRATE_KBPS:-1500}
               networks:
                 - default
                 - traefik-public
@@ -279,6 +281,9 @@ jobs:
                 - RabbitMq__Username=${RABBITMQ_USERNAME:-}
                 - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
                 - Subtitles__Channels=${SUBTITLES_CHANNELS:-}
+                # Delayed player (token-gated relay of the captured segments). Empty token = relay off.
+                - Subtitles__Relay__Token=${SUBTITLES_RELAY_TOKEN:-}
+                - Subtitles__Relay__MaxViewersPerChannel=${SUBTITLES_RELAY_MAX_VIEWERS:-3}
               networks:
                 - default
                 - traefik-public
@@ -372,6 +377,9 @@ jobs:
           COMPOSE_PROFILES=$PROFILES
           SUBTITLES_HOST=${{ secrets.SUBTITLES_HOST }}
           SUBTITLES_CHANNELS=${{ vars.SUBTITLES_CHANNELS }}
+          SUBTITLES_RELAY_TOKEN=${{ secrets.SUBTITLES_RELAY_TOKEN }}
+          SUBTITLES_RELAY_MAX_VIEWERS=${{ vars.SUBTITLES_RELAY_MAX_VIEWERS }}
+          REALTIME_VIDEO_MAX_BITRATE_KBPS=${{ vars.REALTIME_VIDEO_MAX_BITRATE_KBPS }}
           TRANSCRIBER_MODEL=${{ vars.TRANSCRIBER_MODEL }}
           TRANSCRIBER_QUANTIZATION=${{ vars.TRANSCRIBER_QUANTIZATION }}
           TRANSCRIBER_LANGUAGE=${{ vars.TRANSCRIBER_LANGUAGE }}
