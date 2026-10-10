@@ -159,6 +159,19 @@ Status: actively developed.
   and `/transcripts?language=de` filters on the former. Related filter rule: on music Whisper reads the
   profanity prompt back ("pojebane, pojebane, pojebane", "shit, bitch, shit, bitch"), so `TranscriptFilter`
   drops prompt echoes (same prompt word 3x, or >= 4 words at least half from `WhisperWorker.ProfanityVocabulary`).
+- **The subtitles site is a text relay, never a video relay.** `TailoredApps.KickGateway.Subtitles`
+  (`subtitles` container, own hostname via `SUBTITLES_HOST`, opt-in `SUBTITLES_ENABLED`) consumes
+  `LiveTranscript` on a throwaway per-instance queue (`KickMediaTopology.BindLiveTranscript`, non-durable,
+  auto-delete - a late caption is useless) into an in-memory per-slug backlog + fan-out (`TranscriptFeed`,
+  bounded mailboxes, DropOldest) and streams it as SSE (`/{slug}/events`, ids per slug so `Last-Event-ID`
+  resumes). The page embeds Kick's own player (`player.kick.com` iframe): Kick's IVS playback token
+  carries `aws:access-control-allow-origin` = kick.com origins only (verified 2026-10-10 - a foreign
+  Origin gets no ACAO header), so a self-hosted/delayed player would need the VPS to relay video.
+  We don't; captions simply trail the picture by ~ChunkSeconds + inference - player buffer (use 5 s
+  chunks for ~2-4 s). Assets live under `/_/` so they can't collide with a slug; slugs are validated
+  (`[a-z0-9_-]{1,64}`) before reaching the player URL or a queue binding. No DB, no auth (public like
+  `/obs/clips`; `Subtitles:Channels` is the allowlist). `SubtitleEvent.Translations` is the reserved slot
+  for the translation layer (target language -> text); the page already has the track selector.
   **Persistence lives in the Api**, not the transcriber: `LiveTranscriptConsumer` (shared durable
   queue `kickgateway-live-transcripts`, binds every slug) stores each slice in `LiveTranscripts`
   (`LiveTranscriptRecord`, migration `AddLiveTranscripts`), idempotent via `DedupeKey` =
@@ -229,6 +242,7 @@ TailoredApps.KickGateway.slnx
 │   ├── TailoredApps.KickGateway.Subscribers.Analytics/  # Sample: per-channel filtered subscriber (one consumer, many events)
 │   ├── TailoredApps.KickGateway.Subscribers.VideoRecorder/ # Sample: reassembles LiveVideoSegment into playable files
 │   ├── TailoredApps.KickGateway.Subscribers.Transcriber/   # Live speech-to-text: LiveVideoSegment → ffmpeg → Whisper → LiveTranscript (+ Dockerfile)
+│   ├── TailoredApps.KickGateway.Subtitles/         # Live-subtitles site: /{slug} = Kick's player iframe + LiveTranscript captions over SSE (+ Dockerfile)
 │   ├── TailoredApps.KickGateway.AppHost/           # Aspire orchestrator (F5 entrypoint)
 │   └── TailoredApps.KickGateway.ServiceDefaults/   # OTel/health/resilience shared
 ├── docker/docker-compose.yml                       # fallback dev infra without Aspire

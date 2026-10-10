@@ -14,6 +14,7 @@
     <Project Path="src/TailoredApps.KickGateway.Subscribers.Analytics/TailoredApps.KickGateway.Subscribers.Analytics.csproj" />
     <Project Path="src/TailoredApps.KickGateway.Subscribers.VideoRecorder/TailoredApps.KickGateway.Subscribers.VideoRecorder.csproj" />
     <Project Path="src/TailoredApps.KickGateway.Subscribers.Transcriber/TailoredApps.KickGateway.Subscribers.Transcriber.csproj" />
+    <Project Path="src/TailoredApps.KickGateway.Subtitles/TailoredApps.KickGateway.Subtitles.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/TailoredApps.KickGateway.Tests/TailoredApps.KickGateway.Tests.csproj" />
