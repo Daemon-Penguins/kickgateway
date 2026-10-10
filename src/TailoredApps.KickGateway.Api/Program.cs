@@ -112,6 +112,7 @@ builder.Services.AddMassTransit(x =>
     x.AddConsumer<ChannelStatsConsumer>();
     x.AddConsumer<ChannelVideosConsumer>();
     x.AddConsumer<LiveTranscriptConsumer>();
+    x.AddConsumer<LiveTranscriptTranslationConsumer>();
 
     x.UsingRabbitMq((ctx, cfg) =>
     {
@@ -184,6 +185,13 @@ builder.Services.AddMassTransit(x =>
         {
             KickMediaTopology.BindLiveTranscript(e);
             e.ConfigureConsumer<LiveTranscriptConsumer>(ctx);
+        });
+
+        // Translations of those slices (Subscribers.Translator) - stored next to the transcript, joined on read.
+        cfg.ReceiveEndpoint("kickgateway-live-transcript-translations", e =>
+        {
+            KickMediaTopology.BindLiveTranscriptTranslation(e);
+            e.ConfigureConsumer<LiveTranscriptTranslationConsumer>(ctx);
         });
 
         // No ConfigureEndpoints — we've declared the only consumer explicitly,

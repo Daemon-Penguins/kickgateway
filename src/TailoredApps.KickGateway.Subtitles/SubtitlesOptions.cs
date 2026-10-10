@@ -9,11 +9,12 @@ public sealed partial class SubtitlesOptions
     public const string Section = "Subtitles";
 
     /// <summary>
-    /// Channel slugs the site serves. Empty = any slug (the page embeds Kick's player for it and shows
-    /// whatever transcripts arrive). Also the binding list for the transcript queue, so with an allowlist
-    /// the service only receives those channels' transcripts.
+    /// Comma-separated channel slugs the site serves (a plain string so a single env var can set it).
+    /// Empty = any slug (the page embeds Kick's player for it and shows whatever transcripts arrive). Also
+    /// the binding list for the transcript queue, so with an allowlist the service only receives those
+    /// channels' transcripts.
     /// </summary>
-    public string[] Channels { get; set; } = [];
+    public string Channels { get; set; } = "";
 
     /// <summary>
     /// Receive queue name. Default: a unique per-process name. Subtitles are ephemeral — a late line is
@@ -38,9 +39,12 @@ public sealed partial class SubtitlesOptions
         : QueueName.Trim();
 
     /// <summary>Lowercase slugs from <see cref="Channels"/>, blanks dropped.</summary>
-    public string[] NormalizedChannels => Channels
-        .Select(c => (c ?? "").Trim().ToLowerInvariant())
-        .Where(c => c.Length > 0)
+    public string[] NormalizedChannels => ParseList(Channels);
+
+    /// <summary>Comma/semicolon/space-separated slugs → lowercase, distinct.</summary>
+    public static string[] ParseList(string? csv) => (csv ?? "")
+        .Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Select(c => c.ToLowerInvariant())
         .Distinct()
         .ToArray();
 

@@ -10,6 +10,8 @@ namespace TailoredApps.KickGateway.Subtitles;
 /// lines) and a list of live subscribers, each with its own bounded mailbox — a stalled browser
 /// loses its oldest lines instead of slowing everyone down. Ids are per slug and monotonic; they are
 /// the SSE event ids, so <c>Last-Event-ID</c> resumes exactly where the connection dropped.
+/// A translation that arrives later is merged into the backlog item and pushed to live subscribers
+/// as a <see cref="FeedMessage.Translation"/> carrying the updated event under the same id.
 /// </summary>
 public sealed class TranscriptFeed
 {
@@ -17,7 +19,7 @@ public sealed class TranscriptFeed
 
     private sealed class Subscriber
     {
-        public readonly Channel<SubtitleEvent> Mailbox = Channel.CreateBounded<SubtitleEvent>(
+        public readonly Channel<FeedMessage> Mailbox = Channel.CreateBounded<FeedMessage>(
             new BoundedChannelOptions(MailboxCapacity) { FullMode = BoundedChannelFullMode.DropOldest, SingleReader = true });
     }
 
@@ -65,9 +67,34 @@ public sealed class TranscriptFeed
             var ev = SubtitleEvent.From(transcript, slug, state.NextId++, now);
             state.Backlog.AddLast(ev);
             Trim(state, now);
-            foreach (var sub in state.Subscribers)
-                sub.Mailbox.Writer.TryWrite(ev); // bounded + DropOldest: never blocks the consumer
+            Notify(state, new FeedMessage(FeedMessage.Transcript, ev));
             return ev;
+        }
+    }
+
+    /// <summary>
+    /// Attaches a translation to the transcript it refers to (matched on slug + start + audio-clock
+    /// position). Returns the updated event, or null when the transcript is unknown or already gone from
+    /// the backlog — a late translation has nothing to show on.
+    /// </summary>
+    public SubtitleEvent? AttachTranslation(LiveTranscriptTranslation translation)
+    {
+        if (!SubtitlesOptions.TryNormalizeSlug(translation.BroadcasterSlug, out var slug)) return null;
+        var language = (translation.TargetLanguage ?? "").Trim().ToLowerInvariant();
+        if (language.Length == 0 || string.IsNullOrWhiteSpace(translation.Text)) return null;
+
+        lock (_gate)
+        {
+            if (!_channels.TryGetValue(slug, out var state)) return null;
+            for (var node = state.Backlog.Last; node is not null; node = node.Previous)
+            {
+                if (!node.Value.Matches(translation.StartedAt, translation.AudioStartSeconds)) continue;
+                var updated = node.Value.WithTranslation(language, translation.Text.Trim(), translation.Segments);
+                node.Value = updated;
+                Notify(state, new FeedMessage(FeedMessage.Translation, updated));
+                return updated;
+            }
+            return null;
         }
     }
 
@@ -83,10 +110,10 @@ public sealed class TranscriptFeed
     }
 
     /// <summary>
-    /// Backlog after <paramref name="afterId"/> followed by live events, gap-free: the snapshot and the
+    /// Backlog after <paramref name="afterId"/> followed by live messages, gap-free: the snapshot and the
     /// subscription happen under one lock, so nothing published in between is missed or duplicated.
     /// </summary>
-    public async IAsyncEnumerable<SubtitleEvent> SubscribeAsync(string slug, long afterId, [EnumeratorCancellation] CancellationToken ct)
+    public async IAsyncEnumerable<FeedMessage> SubscribeAsync(string slug, long afterId, [EnumeratorCancellation] CancellationToken ct)
     {
         var subscriber = new Subscriber();
         SubtitleEvent[] backlog;
@@ -100,9 +127,9 @@ public sealed class TranscriptFeed
 
         try
         {
-            foreach (var ev in backlog) yield return ev;
-            await foreach (var ev in subscriber.Mailbox.Reader.ReadAllAsync(ct))
-                yield return ev;
+            foreach (var ev in backlog) yield return new FeedMessage(FeedMessage.Transcript, ev);
+            await foreach (var message in subscriber.Mailbox.Reader.ReadAllAsync(ct))
+                yield return message;
         }
         finally
         {
@@ -122,6 +149,12 @@ public sealed class TranscriptFeed
         if (!_channels.TryGetValue(slug, out var state))
             _channels[slug] = state = new ChannelState();
         return state;
+    }
+
+    private static void Notify(ChannelState state, FeedMessage message)
+    {
+        foreach (var sub in state.Subscribers)
+            sub.Mailbox.Writer.TryWrite(message); // bounded + DropOldest: never blocks the consumer
     }
 
     private void Trim(ChannelState state, DateTime now)

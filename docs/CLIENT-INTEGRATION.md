@@ -226,6 +226,13 @@ one `TailoredApps.KickGateway.Contracts.Realtime.Media.LiveTranscript` per ~15 s
 | `FirstMediaSequence` / `LastMediaSequence` | the HLS segments that contributed |
 | `Model`, `TranscribedAt`, `ProcessingSeconds` | provenance + how far behind live the text runs |
 
+When the `Subscribers.Translator` service runs, each slice in one of its source languages is followed by a
+`TailoredApps.KickGateway.Contracts.Realtime.Media.LiveTranscriptTranslation` on its own topic exchange
+(bind with `KickMediaTopology.BindLiveTranscriptTranslation`): `SourceLanguage`, `TargetLanguage`, `Text`,
+`Segments[]` (translated texts with the **source timings**), `Provider`, `TranslatedAt`, `ProcessingSeconds`.
+Correlate with the transcript on (`BroadcasterSlug`, `StartedAt`, `AudioStartSeconds`). Best-effort like the
+transcript: a slice that was noise, stale or failed at the provider simply has no translation.
+
 ```csharp
 using TailoredApps.KickGateway.Contracts.Realtime.Media;
 

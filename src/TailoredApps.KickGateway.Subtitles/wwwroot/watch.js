@@ -2,8 +2,9 @@
   'use strict';
 
   const PLAYER_BASE = 'https://player.kick.com';
-  const IDLE_HIDE_MS = 9000;      // captions fade this long after the last line
-  const BACKLOG_AGE_MS = 25000;   // older lines from the backlog go to the history panel only
+  const SITE_LANG = 'pl';             // "auto" track: translate into this when a line is in another language
+  const IDLE_HIDE_MS = 9000;          // captions fade this long after the last line
+  const BACKLOG_AGE_MS = 25000;       // older lines from the backlog go to the history panel only
   const HUD_HIDE_MS = 3000;
   const HISTORY_MAX = 200;
 
@@ -26,8 +27,8 @@
     set size(v) { localStorage.setItem('captionSize', String(v)); applySize(); },
     get tags() { return (localStorage.getItem('captionTags') ?? '1') === '1'; },
     set tags(v) { localStorage.setItem('captionTags', v ? '1' : '0'); captions.classList.toggle('no-tags', !v); },
-    get track() { return localStorage.getItem('captionTrack') || 'original'; },
-    set track(v) { localStorage.setItem('captionTrack', v); track.value = v; rerender(); },
+    get track() { return localStorage.getItem('captionTrack') || 'auto'; },
+    set track(v) { localStorage.setItem('captionTrack', v); track.value = v; rerender(); rerenderHistory(); },
   };
   function applySize() { document.documentElement.style.setProperty('--caption-size', prefs.size + 'vw'); }
   applySize();
@@ -53,50 +54,50 @@
   ['mousemove', 'touchstart', 'keydown'].forEach(ev => document.addEventListener(ev, showHud, { passive: true }));
   showHud();
 
-  // ---- captions ----
-  let recent = [];            // last two displayed events, oldest first
+  // ---- state ----
+  const events = new Map();   // id -> latest event (translations merge in)
+  let recent = [];            // ids of the last two displayed events, oldest first
   let idleTimer;
   let lagEma = null;
-  const languagesSeen = new Set();
+  const langCounts = new Map();
 
-  function textOf(ev) {
-    const t = prefs.track;
-    if (t !== 'original' && ev.translations && ev.translations[t]) return ev.translations[t];
-    return ev.text;
+  function noteLanguage(lang) { if (lang) langCounts.set(lang, (langCounts.get(lang) || 0) + 1); }
+  function mostCommonLanguage() {
+    let best = '', n = 0;
+    for (const [l, c] of langCounts) if (c > n) { best = l; n = c; }
+    return best;
   }
-  function tagHtml(ev, fallbackLang) {
-    const lang = ev.language || fallbackLang || '';
+
+  // Which text to show for an event under the current track; null language = original.
+  function pick(ev) {
+    const t = prefs.track;
+    const wantsTranslation = t === SITE_LANG || (t === 'auto' && ev.language && ev.language !== SITE_LANG);
+    if (wantsTranslation && ev.translations && ev.translations[SITE_LANG])
+      return { text: ev.translations[SITE_LANG], lang: SITE_LANG, translated: true, from: ev.language };
+    return { text: ev.text, lang: ev.language, translated: false };
+  }
+  function tagHtml(lang, translated, from) {
     if (!lang) return '';
-    const other = languagesSeen.size > 0 && lang !== mostCommonLanguage();
-    return `<span class="tag ${other ? 'other' : ''}">[${escapeHtml(lang)}]</span>`;
+    const other = !translated && langCounts.size > 0 && lang !== mostCommonLanguage();
+    const label = translated ? `${escapeHtml(from)}→${escapeHtml(lang)}` : escapeHtml(lang);
+    return `<span class="tag ${other ? 'other' : ''} ${translated ? 'translated' : ''}">[${label}]</span>`;
   }
   function render(el, ev) {
     if (!ev) { el.innerHTML = ''; return; }
-    el.innerHTML = tagHtml(ev) + escapeHtml(textOf(ev));
+    const p = pick(ev);
+    el.innerHTML = tagHtml(p.lang, p.translated, p.from) + escapeHtml(p.text);
   }
   function rerender() {
-    render(prev, recent.length > 1 ? recent[0] : null);
-    render(cur, recent[recent.length - 1]);
+    render(prev, recent.length > 1 ? events.get(recent[0]) : null);
+    render(cur, recent.length ? events.get(recent[recent.length - 1]) : null);
   }
   function show(ev) {
-    recent.push(ev);
+    if (!recent.includes(ev.id)) recent.push(ev.id);
     if (recent.length > 2) recent.shift();
     rerender();
     captions.classList.remove('idle');
     clearTimeout(idleTimer);
     idleTimer = setTimeout(() => captions.classList.add('idle'), IDLE_HIDE_MS);
-  }
-
-  const langCounts = new Map();
-  function noteLanguage(lang) {
-    if (!lang) return;
-    languagesSeen.add(lang);
-    langCounts.set(lang, (langCounts.get(lang) || 0) + 1);
-  }
-  function mostCommonLanguage() {
-    let best = '', n = 0;
-    for (const [l, c] of langCounts) if (c > n) { best = l; n = c; }
-    return best;
   }
 
   function noteLag(ev) {
@@ -105,29 +106,50 @@
     lag.textContent = `napisy ~${lagEma.toFixed(0)} s za dźwiękiem`;
   }
 
-  function addHistory(ev) {
-    const li = document.createElement('li');
+  function historyHtml(ev) {
     const time = new Date(ev.startedAt);
     const hh = String(time.getHours()).padStart(2, '0'), mm = String(time.getMinutes()).padStart(2, '0'), ss = String(time.getSeconds()).padStart(2, '0');
-    const conf = typeof ev.confidence === 'number' && ev.confidence > 0 && ev.confidence < 0.5 ? ' low' : '';
-    li.innerHTML = `<time>${hh}:${mm}:${ss}</time>${tagHtml(ev)}<span class="${conf.trim()}">${escapeHtml(textOf(ev))}</span>`;
+    const low = typeof ev.confidence === 'number' && ev.confidence > 0 && ev.confidence < 0.5 ? 'low' : '';
+    const p = pick(ev);
+    return `<time>${hh}:${mm}:${ss}</time>${tagHtml(p.lang, p.translated, p.from)}<span class="${low}">${escapeHtml(p.text)}</span>`;
+  }
+  function addHistory(ev) {
+    const li = document.createElement('li');
+    li.dataset.id = ev.id;
+    li.innerHTML = historyHtml(ev);
     log.appendChild(li);
     while (log.children.length > HISTORY_MAX) log.removeChild(log.firstChild);
     log.scrollTop = log.scrollHeight;
   }
+  function rerenderHistory() {
+    for (const li of log.children) {
+      const ev = events.get(Number(li.dataset.id));
+      if (ev) li.innerHTML = historyHtml(ev);
+    }
+  }
+
+  function enableTranslationTrack() {
+    const opt = track.querySelector(`option[value="${SITE_LANG}"]`);
+    if (opt && opt.disabled) { opt.disabled = false; opt.textContent = 'polski'; }
+  }
 
   function onTranscript(ev) {
+    events.set(ev.id, ev);
     noteLanguage(ev.language);
-    if (ev.translations && ev.translations.pl) {
-      const pl = track.querySelector('option[value="pl"]');
-      pl.disabled = false;
-      pl.textContent = 'polski';
-    }
+    if (ev.translations && ev.translations[SITE_LANG]) enableTranslationTrack();
     addHistory(ev);
     const age = Date.now() - Date.parse(ev.receivedAt);
     if (age > BACKLOG_AGE_MS) return; // backlog: history only, don't flash old lines as current
     noteLag(ev);
     show(ev);
+  }
+
+  function onTranslation(ev) {
+    events.set(ev.id, ev);
+    enableTranslationTrack();
+    const li = [...log.children].find(l => Number(l.dataset.id) === ev.id);
+    if (li) li.innerHTML = historyHtml(ev);
+    if (recent.includes(ev.id)) rerender();
   }
 
   // ---- SSE ----
@@ -136,6 +158,9 @@
   es.onerror = () => { status.className = 'dot connecting'; status.title = 'łączenie ponownie…'; };
   es.addEventListener('transcript', e => {
     try { onTranscript(JSON.parse(e.data)); } catch (err) { console.error('bad transcript event', err); }
+  });
+  es.addEventListener('translation', e => {
+    try { onTranslation(JSON.parse(e.data)); } catch (err) { console.error('bad translation event', err); }
   });
 
   function escapeHtml(s) {

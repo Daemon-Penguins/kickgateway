@@ -34,8 +34,8 @@ public sealed class RelayOptions
     /// <summary>A viewer that has not polled the playlist for this long frees its slot.</summary>
     public int ViewerIdleSeconds { get; set; } = 15;
 
-    /// <summary>Channels to buffer. Empty = the site's <c>Subtitles:Channels</c>; both empty = every live channel on the exchange (memory!).</summary>
-    public string[] Channels { get; set; } = [];
+    /// <summary>Comma-separated channels to buffer. Empty = the site's <c>Subtitles:Channels</c>; both empty = every live channel on the exchange (memory!).</summary>
+    public string Channels { get; set; } = "";
 
     public bool Enabled => (Token ?? "").Trim().Length >= MinTokenLength;
 
@@ -48,11 +48,7 @@ public sealed class RelayOptions
         return expected.Length == actual.Length && CryptographicOperations.FixedTimeEquals(expected, actual);
     }
 
-    public string[] NormalizedChannels => Channels
-        .Select(c => (c ?? "").Trim().ToLowerInvariant())
-        .Where(c => c.Length > 0)
-        .Distinct()
-        .ToArray();
+    public string[] NormalizedChannels => SubtitlesOptions.ParseList(Channels);
 
     public int ClampDelay(int? requested) =>
         Math.Clamp(requested ?? DefaultDelaySeconds, 0, MaxDelaySeconds);

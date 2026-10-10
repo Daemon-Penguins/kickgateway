@@ -8,9 +8,11 @@ public static class Sse
 {
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    /// <summary>One SSE frame: <c>id</c>, <c>event: transcript</c>, single-line JSON <c>data</c>, blank line.</summary>
-    public static string Format(SubtitleEvent ev) =>
-        $"id: {ev.Id}\nevent: transcript\ndata: {JsonSerializer.Serialize(ev, Json)}\n\n";
+    /// <summary>One SSE frame: <c>id</c> (the transcript's id, also for a translation update), <c>event</c>, single-line JSON <c>data</c>, blank line.</summary>
+    public static string Format(FeedMessage message) =>
+        $"id: {message.Event.Id}\nevent: {message.Kind}\ndata: {JsonSerializer.Serialize(message.Event, Json)}\n\n";
+
+    public static string Format(SubtitleEvent ev) => Format(new FeedMessage(FeedMessage.Transcript, ev));
 
     /// <summary>Reads the resume point: the <c>Last-Event-ID</c> header EventSource sends on reconnect, else <c>?after=</c>.</summary>
     public static long ResumeAfter(HttpRequest request)
@@ -66,8 +68,8 @@ public static class Sse
 
         try
         {
-            await foreach (var ev in feed.SubscribeAsync(slug, afterId, ct))
-                await WriteAsync(Format(ev), ct);
+            await foreach (var message in feed.SubscribeAsync(slug, afterId, ct))
+                await WriteAsync(Format(message), ct);
         }
         catch (OperationCanceledException)
         {

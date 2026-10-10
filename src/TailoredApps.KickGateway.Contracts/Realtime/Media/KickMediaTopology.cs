@@ -24,6 +24,10 @@ public static class KickMediaTopology
         cfg.Publish<LiveTranscript>(p => p.ExchangeType = "topic");
         cfg.Send<LiveTranscript>(s => s.UseRoutingKeyFormatter(ctx =>
             (ctx.Message.BroadcasterSlug ?? string.Empty).ToLowerInvariant()));
+
+        cfg.Publish<LiveTranscriptTranslation>(p => p.ExchangeType = "topic");
+        cfg.Send<LiveTranscriptTranslation>(s => s.UseRoutingKeyFormatter(ctx =>
+            (ctx.Message.BroadcasterSlug ?? string.Empty).ToLowerInvariant()));
     }
 
     /// <summary>
@@ -45,6 +49,15 @@ public static class KickMediaTopology
         IRabbitMqReceiveEndpointConfigurator endpoint,
         params string[] channelSlugs)
         => Bind<LiveTranscript>(endpoint, channelSlugs);
+
+    /// <summary>
+    /// Bind a receive endpoint to the live-transcript-translation exchange (<see cref="LiveTranscriptTranslation"/>).
+    /// Same slug routing as the transcripts.
+    /// </summary>
+    public static void BindLiveTranscriptTranslation(
+        IRabbitMqReceiveEndpointConfigurator endpoint,
+        params string[] channelSlugs)
+        => Bind<LiveTranscriptTranslation>(endpoint, channelSlugs);
 
     private static void Bind<TMessage>(IRabbitMqReceiveEndpointConfigurator endpoint, string[] channelSlugs)
         where TMessage : class

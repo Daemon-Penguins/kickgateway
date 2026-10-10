@@ -24,6 +24,7 @@ env:
   MCP_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-mcp
   TRANSCRIBER_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-transcriber
   SUBTITLES_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-subtitles
+  TRANSLATOR_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-translator
 
 jobs:
   build-and-push:
@@ -103,6 +104,18 @@ jobs:
             ${{ env.SUBTITLES_IMAGE }}:${{ github.sha }}
           cache-from: type=gha,scope=subtitles
           cache-to: type=gha,scope=subtitles,mode=max
+
+      - name: Build & push Translator image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/TailoredApps.KickGateway.Subscribers.Translator/Dockerfile
+          push: true
+          tags: |
+            ${{ env.TRANSLATOR_IMAGE }}:latest
+            ${{ env.TRANSLATOR_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha,scope=translator
+          cache-to: type=gha,scope=translator,mode=max
 
       - name: Build & push Transcriber image
         uses: docker/build-push-action@v6
@@ -297,6 +310,31 @@ jobs:
                 - "traefik.http.services.kickgateway-subtitles.loadbalancer.server.port=8080"
                 - "traefik.docker.network=traefik-public"
 
+            # Translator (OPT-IN via TRANSLATOR_ENABLED + TRANSLATOR_API_KEY): LiveTranscript slices in the configured
+            # source languages (default German) go to an LLM and come back as LiveTranscriptTranslation (default
+            # Polish) - stored by the api next to the transcript and shown by the subtitles site. One call per
+            # slice (~10-15 s of speech); slices below the confidence floor or older than two minutes are skipped.
+            translator:
+              image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-translator:${IMAGE_TAG:-latest}
+              profiles: ["translator"]
+              restart: unless-stopped
+              environment:
+                - DOTNET_ENVIRONMENT=Production
+                - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
+                - RabbitMq__Port=${RABBITMQ_PORT:-5672}
+                - RabbitMq__VirtualHost=${RABBITMQ_VHOST:-/}
+                - RabbitMq__Username=${RABBITMQ_USERNAME:-}
+                - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
+                - Translator__SourceLanguages=${TRANSLATOR_SOURCE_LANGUAGES:-de}
+                - Translator__TargetLanguage=${TRANSLATOR_TARGET_LANGUAGE:-pl}
+                - Translator__Channels=${TRANSLATOR_CHANNELS:-}
+                - Translator__Llm__Provider=${TRANSLATOR_PROVIDER:-anthropic}
+                - Translator__Llm__ApiKey=${TRANSLATOR_API_KEY:-}
+                - Translator__Llm__Model=${TRANSLATOR_MODEL:-}
+                - Translator__Llm__BaseUrl=${TRANSLATOR_BASE_URL:-}
+              networks:
+                - default
+
             # Live speech-to-text, CPU only (no GPU on the VPS), OPT-IN. Consumes LiveVideoSegment - so it only
             # works while REALTIME_VIDEO_ENABLED=true and a channel is live - and publishes LiveTranscript,
             # which the api stores in LiveTranscripts. Default model LargeV3Turbo (best Polish quality; the
@@ -358,6 +396,7 @@ jobs:
           PROFILES=""
           [ "${{ vars.TRANSCRIBER_ENABLED }}" = "true" ] && PROFILES="transcriber"
           [ "${{ vars.SUBTITLES_ENABLED }}" = "true" ] && PROFILES="${PROFILES:+$PROFILES,}subtitles"
+          [ "${{ vars.TRANSLATOR_ENABLED }}" = "true" ] && PROFILES="${PROFILES:+$PROFILES,}translator"
 
           # Write .env with secrets
           $SSH_CMD "cat > /opt/apps/kickgateway/.env << 'ENVFILE'
@@ -380,6 +419,13 @@ jobs:
           SUBTITLES_RELAY_TOKEN=${{ secrets.SUBTITLES_RELAY_TOKEN }}
           SUBTITLES_RELAY_MAX_VIEWERS=${{ vars.SUBTITLES_RELAY_MAX_VIEWERS }}
           REALTIME_VIDEO_MAX_BITRATE_KBPS=${{ vars.REALTIME_VIDEO_MAX_BITRATE_KBPS }}
+          TRANSLATOR_API_KEY=${{ secrets.TRANSLATOR_API_KEY }}
+          TRANSLATOR_PROVIDER=${{ vars.TRANSLATOR_PROVIDER }}
+          TRANSLATOR_MODEL=${{ vars.TRANSLATOR_MODEL }}
+          TRANSLATOR_BASE_URL=${{ vars.TRANSLATOR_BASE_URL }}
+          TRANSLATOR_SOURCE_LANGUAGES=${{ vars.TRANSLATOR_SOURCE_LANGUAGES }}
+          TRANSLATOR_TARGET_LANGUAGE=${{ vars.TRANSLATOR_TARGET_LANGUAGE }}
+          TRANSLATOR_CHANNELS=${{ vars.TRANSLATOR_CHANNELS }}
           TRANSCRIBER_MODEL=${{ vars.TRANSCRIBER_MODEL }}
           TRANSCRIBER_QUANTIZATION=${{ vars.TRANSCRIBER_QUANTIZATION }}
           TRANSCRIBER_LANGUAGE=${{ vars.TRANSCRIBER_LANGUAGE }}
@@ -407,6 +453,9 @@ jobs:
           fi
           if [ "${{ vars.SUBTITLES_ENABLED }}" != "true" ]; then
             $SSH_CMD "cd /opt/apps/kickgateway && docker compose --profile subtitles rm -s -f subtitles >/dev/null 2>&1 || true"
+          fi
+          if [ "${{ vars.TRANSLATOR_ENABLED }}" != "true" ]; then
+            $SSH_CMD "cd /opt/apps/kickgateway && docker compose --profile translator rm -s -f translator >/dev/null 2>&1 || true"
           fi
 
           # Verify

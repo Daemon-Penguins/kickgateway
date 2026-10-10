@@ -179,8 +179,21 @@ Status: actively developed.
   cap `Kick:Realtime:Video:MaxBitrateKbps` lowered to 1500 (~480p; audio is identical for Whisper).
   Assets live under `/_/` so they can't collide with a slug; slugs are validated
   (`[a-z0-9_-]{1,64}`) before reaching the player URL or a queue binding. No DB, no auth (public like
-  `/obs/clips`; `Subtitles:Channels` is the allowlist). `SubtitleEvent.Translations` is the reserved slot
-  for the translation layer (target language -> text); the page already has the track selector.
+  `/obs/clips`; `Subtitles:Channels` is the allowlist - a CSV string, not an array, so one env var sets it).
+- **Translation is a separate subscriber, one LLM call per slice, published as its own contract.**
+  `TailoredApps.KickGateway.Subscribers.Translator` consumes `LiveTranscript` on a throwaway queue and, for
+  slices whose `Language` is in `Translator:SourceLanguages` (default `de`) and not the target (`pl`),
+  above `MinConfidence` (0.45) and younger than `MaxAgeSeconds` (120) (`TranslationPolicy`), sends the
+  segments as numbered lines (`TranslationPrompt`) to Anthropic Messages or any OpenAI-compatible
+  `/chat/completions` endpoint (`stub` = no network, for wiring) and publishes
+  `Contracts.Realtime.Media.LiveTranscriptTranslation` (translated segments keep the SOURCE timings; a
+  broken numbering falls back to one segment for the slice) directly via the bus - no DB, no outbox.
+  Correlation with the transcript is (slug, StartedAt, AudioStartSeconds) = the Api's `DedupeKey`
+  inputs. The Api stores it in `LiveTranscriptTranslations` (unique per key + target language, no FK -
+  the transcript may land later) and joins it on read (`translations`, `translatedSegments`); the
+  subtitles site merges it into the backlog item and pushes a `translation` SSE event under the same id,
+  and both pages default to the `auto` track (foreign-language line -> translation, Polish as spoken).
+  The profanity prompt convention carries over: the system prompt forbids censoring.
   **Persistence lives in the Api**, not the transcriber: `LiveTranscriptConsumer` (shared durable
   queue `kickgateway-live-transcripts`, binds every slug) stores each slice in `LiveTranscripts`
   (`LiveTranscriptRecord`, migration `AddLiveTranscripts`), idempotent via `DedupeKey` =
@@ -252,6 +265,7 @@ TailoredApps.KickGateway.slnx
 │   ├── TailoredApps.KickGateway.Subscribers.VideoRecorder/ # Sample: reassembles LiveVideoSegment into playable files
 │   ├── TailoredApps.KickGateway.Subscribers.Transcriber/   # Live speech-to-text: LiveVideoSegment → ffmpeg → Whisper → LiveTranscript (+ Dockerfile)
 │   ├── TailoredApps.KickGateway.Subtitles/         # Live-subtitles site: /{slug} = Kick's player iframe + LiveTranscript captions over SSE (+ Dockerfile)
+│   ├── TailoredApps.KickGateway.Subscribers.Translator/    # LiveTranscript (de) → LLM → LiveTranscriptTranslation (pl) (+ Dockerfile)
 │   ├── TailoredApps.KickGateway.AppHost/           # Aspire orchestrator (F5 entrypoint)
 │   └── TailoredApps.KickGateway.ServiceDefaults/   # OTel/health/resilience shared
 ├── docker/docker-compose.yml                       # fallback dev infra without Aspire

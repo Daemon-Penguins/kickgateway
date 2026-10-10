@@ -171,7 +171,8 @@ Each item carries `startedAt`/`endedAt` (estimated UTC stream time, +/- one HLS 
 `audioStartSeconds` (the transcriber's per-channel audio clock, for ordering/gap detection), the
 `text`, `language` (the language the slice was transcribed in), `detectedLanguage` and
 `languageProbability` (what Whisper's detector heard on the slice and how sure it was; `null` when the
-transcriber ran with a fixed language), per-segment `segments[]` with their own times, `confidence`,
+transcriber ran with a fixed language), `translations` / `translatedSegments` (target language → text /
+timed segments, when the translator produced one), per-segment `segments[]` with their own times, `confidence`,
 `firstMediaSequence`/`lastMediaSequence` (HLS provenance), `model`, `transcribedAt` and `processingSeconds`.
 
 Chronology with chat: everything is UTC on the gateway's clock, so `startedAt`/`endedAt` sort

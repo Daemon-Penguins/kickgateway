@@ -28,7 +28,9 @@ public sealed record TranscriptDto(
     long LastMediaSequence,
     string Model,
     DateTime TranscribedAt,
-    double ProcessingSeconds);
+    double ProcessingSeconds,
+    IReadOnlyDictionary<string, string>? Translations,
+    IReadOnlyDictionary<string, IReadOnlyList<TranscriptSegmentDto>>? TranslatedSegments);
 
 /// <summary>A page of transcripts, oldest first. Pass <see cref="NextCursor"/> back as <c>cursor</c> for the next page. <see cref="Language"/> echoes the language filter, if any.</summary>
 public sealed record TranscriptPage(string Channel, AnalyticsWindow Window, string? Query, string? Language, IReadOnlyList<TranscriptDto> Items, string? NextCursor);
@@ -83,6 +85,7 @@ public static class TranscriptQueries
             q = q.Where(x => x.StartedAt > afterStarted || (x.StartedAt == afterStarted && x.Id > afterId));
 
         var rows = await q.OrderBy(x => x.StartedAt).ThenBy(x => x.Id).Take(limit + 1).ToListAsync(ct);
+        var translations = await TranslationsForAsync(db, rows, ct);
 
         string? next = null;
         if (rows.Count > limit)
@@ -92,7 +95,7 @@ public static class TranscriptQueries
             next = FormatCursor(last.StartedAt, last.Id);
         }
 
-        return new TranscriptPage(channel, window, text, lang, rows.Select(ToDto).ToList(), next);
+        return new TranscriptPage(channel, window, text, lang, rows.Select(r => ToDto(r, translations)).ToList(), next);
     }
 
     /// <summary>What was being said on <paramref name="channel"/> at <paramref name="at"/> (± <paramref name="toleranceSeconds"/>), oldest first.</summary>
@@ -106,12 +109,40 @@ public static class TranscriptQueries
             .OrderBy(x => x.StartedAt).ThenBy(x => x.Id)
             .Take(20)
             .ToListAsync(ct);
-        return rows.Select(ToDto).ToList();
+        var translations = await TranslationsForAsync(db, rows, ct);
+        return rows.Select(r => ToDto(r, translations)).ToList();
     }
 
-    public static TranscriptDto ToDto(LiveTranscriptRecord r) => new(
-        r.Id, r.ChannelSlug, r.StartedAt, r.EndedAt, r.AudioStartSeconds, r.AudioSeconds, r.Text, r.Language, r.DetectedLanguage, r.LanguageProbability, r.Confidence,
-        TranscriptJson.ReadSegments(r.SegmentsJson), r.FirstMediaSequence, r.LastMediaSequence, r.Model, r.TranscribedAt, r.ProcessingSeconds);
+    /// <summary>Translations of <paramref name="rows"/> keyed by the transcript's dedupe key, one query.</summary>
+    public static async Task<ILookup<string, LiveTranscriptTranslationRecord>> TranslationsForAsync(
+        KickGatewayDbContext db, IReadOnlyList<LiveTranscriptRecord> rows, CancellationToken ct)
+    {
+        if (rows.Count == 0) return Array.Empty<LiveTranscriptTranslationRecord>().ToLookup(t => t.TranscriptDedupeKey);
+        var keys = rows.Select(r => r.DedupeKey).ToList();
+        var list = await db.LiveTranscriptTranslations.AsNoTracking().Where(t => keys.Contains(t.TranscriptDedupeKey)).ToListAsync(ct);
+        return list.ToLookup(t => t.TranscriptDedupeKey);
+    }
+
+    public static TranscriptDto ToDto(LiveTranscriptRecord r) => ToDto(r, null);
+
+    public static TranscriptDto ToDto(LiveTranscriptRecord r, ILookup<string, LiveTranscriptTranslationRecord>? translations)
+    {
+        Dictionary<string, string>? texts = null;
+        Dictionary<string, IReadOnlyList<TranscriptSegmentDto>>? segments = null;
+        if (translations is not null)
+        {
+            foreach (var t in translations[r.DedupeKey])
+            {
+                texts ??= new Dictionary<string, string>(StringComparer.Ordinal);
+                segments ??= new Dictionary<string, IReadOnlyList<TranscriptSegmentDto>>(StringComparer.Ordinal);
+                texts[t.TargetLanguage] = t.Text;
+                segments[t.TargetLanguage] = TranscriptJson.ReadSegments(t.SegmentsJson);
+            }
+        }
+        return new TranscriptDto(
+            r.Id, r.ChannelSlug, r.StartedAt, r.EndedAt, r.AudioStartSeconds, r.AudioSeconds, r.Text, r.Language, r.DetectedLanguage, r.LanguageProbability, r.Confidence,
+            TranscriptJson.ReadSegments(r.SegmentsJson), r.FirstMediaSequence, r.LastMediaSequence, r.Model, r.TranscribedAt, r.ProcessingSeconds, texts, segments);
+    }
 
     private static string FormatCursor(DateTime startedAt, long id) =>
         startedAt.Ticks.ToString(CultureInfo.InvariantCulture) + ":" + id.ToString(CultureInfo.InvariantCulture);
