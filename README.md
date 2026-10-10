@@ -232,8 +232,9 @@ push) returns to the pipeline-managed version.
 | `SUBTITLES_ENABLED` | Optional. `true` runs the `subtitles` container (compose profile): the live-subtitles site at `https://${SUBTITLES_HOST}/{slug}`. Needs the `SUBTITLES_HOST` secret and a transcriber publishing somewhere. |
 | `SUBTITLES_CHANNELS` | Optional. Comma-separated slugs the subtitles site serves (and the only transcripts it receives). Empty = any channel. |
 | `SUBTITLES_RELAY_MAX_VIEWERS` | Optional. Concurrent viewers per channel on the delayed player, default `3`. Each viewer costs the captured bitrate in outbound transfer. |
-| `TRANSLATOR_ENABLED` | Optional. `true` runs the `translator` container (compose profile): LLM translation of transcript slices in `TRANSLATOR_SOURCE_LANGUAGES` (default `de`) into `TRANSLATOR_TARGET_LANGUAGE` (default `pl`). Needs the `TRANSLATOR_API_KEY` secret. |
-| `TRANSLATOR_PROVIDER` / `TRANSLATOR_MODEL` / `TRANSLATOR_BASE_URL` | Optional. `anthropic` (default, model `claude-haiku-5-5`) or `openai` (any `/chat/completions` endpoint: OpenAI, LiteLLM, OpenRouter; default model `gpt-4o-mini`). |
+| `TRANSLATOR_ENABLED` | Optional. `true` runs the `translator` container (compose profile): transcript slices in `TRANSLATOR_SOURCE_LANGUAGES` (default `de`) translated into `TRANSLATOR_TARGET_LANGUAGE` (default `pl`). |
+| `TRANSLATOR_PROVIDER` | Optional. `deepl` (default; the free plan gives 500k characters/month, a free key ends with `:fx`), `openai` (any `/chat/completions` endpoint — a local Ollama needs no key, also LiteLLM/OpenRouter/OpenAI) or `anthropic`. |
+| `TRANSLATOR_MODEL` / `TRANSLATOR_BASE_URL` / `TRANSLATOR_FORMALITY` | Optional. LLM model id (defaults `gpt-4o-mini` / `claude-haiku-5-5`; Ollama e.g. `qwen2.5:7b`), endpoint override (Ollama: `http://host:11434/v1`), DeepL formality (default `prefer_less`). |
 | `TRANSLATOR_SOURCE_LANGUAGES` / `TRANSLATOR_TARGET_LANGUAGE` / `TRANSLATOR_CHANNELS` | Optional. Comma-separated source codes (default `de`), target code (default `pl`), channel allowlist (empty = all). |
 | `REALTIME_VIDEO_MAX_BITRATE_KBPS` | Optional. The realtime listener captures the highest HLS rendition under this cap, default `1500` (~480p). Audio for the transcriber is the same at any rendition; the subtitles relay serves exactly this rendition. |
 
@@ -246,7 +247,7 @@ push) returns to the pipeline-managed version.
 | `PUBLIC_HOST` | Fully qualified hostname for the public URL (`example.com`) |
 | `SUBTITLES_HOST` | Optional (with `SUBTITLES_ENABLED`). Hostname of the live-subtitles site (`subtitles.example.com`); needs its own DNS A record → VPS, Traefik issues the certificate. |
 | `SUBTITLES_RELAY_TOKEN` | Optional. Enables the delayed player (`/{slug}/player?token=…`): at least 16 random characters. Empty = relay off, the public iframe page still works. |
-| `TRANSLATOR_API_KEY` | Optional (with `TRANSLATOR_ENABLED`). API key of the translation provider (Anthropic by default). |
+| `TRANSLATOR_API_KEY` | Optional (with `TRANSLATOR_ENABLED`). DeepL / Anthropic key; not needed for a local Ollama via `openai`. |
 | `KICK_WEBHOOK_URL` | Full webhook URL Kick will POST to (`https://example.com/api/webhooks/kick`) |
 | `DB_CONNECTION_STRING` | `Server=…,1433;Database=kickgateway;User Id=…;Password=…;TrustServerCertificate=true;Encrypt=false` |
 | `RABBITMQ_HOST` / `RABBITMQ_PORT` / `RABBITMQ_VHOST` / `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | broker (private vhost recommended) |
@@ -422,16 +423,18 @@ segments and an empty `translations` slot — the planned translation layer fill
 language and the page's track selector switches between the original and the translation.
 
 **Translation layer.** `TailoredApps.KickGateway.Subscribers.Translator` consumes `LiveTranscript`, and
-for slices in the configured source languages (default German) asks an LLM — Anthropic Messages API or
-any OpenAI-compatible `/chat/completions` endpoint — for a translation into the target language (default
-Polish), one numbered line per Whisper segment so the timings survive, and publishes
+for slices in the configured source languages (default German) asks the provider for a translation into
+the target language (default Polish) — **DeepL** by default (segments go as a text array and come back
+one for one; the free plan's 500k characters/month is ~8 hours of continuous German speech), or a
+local/remote LLM over an OpenAI-compatible endpoint (Ollama on the Mac mini, LiteLLM, …) or Anthropic,
+with one numbered line per Whisper segment so the timings survive — and publishes
 `Contracts.Realtime.Media.LiveTranscriptTranslation` on its own slug-routed exchange. The Api stores it
 (`LiveTranscriptTranslations`, exposed as `translations` / `translatedSegments` on the transcripts
 endpoints); the subtitles site merges it into the backlog and pushes a `translation` SSE event, and both
 pages default to the **auto** track: a line in another language is shown translated (`[de→pl]`), Polish
 stays as spoken; the selector also offers *oryginał* and *polski*. Slices below the confidence floor
 (0.45) or older than two minutes are skipped — noise isn't worth a call. Locally without a key:
-`Translator__Llm__Provider=stub` marks lines instead of translating, which exercises the whole path.
+`Translator__Provider__Name=stub` marks lines instead of translating, which exercises the whole path.
 
 **Delayed player (relay).** `GET /{slug}/player?token=…&delay=15` is the token-gated variant with
 the video 15 s behind live and captions timed exactly. The realtime listener already pulls the live

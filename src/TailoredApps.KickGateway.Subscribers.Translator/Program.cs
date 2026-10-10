@@ -5,9 +5,11 @@ using TailoredApps.KickGateway.Subscribers.Translator.Consumers;
 using TailoredApps.KickGateway.Subscribers.Translator.Translation;
 
 // Live-transcript translator: consumes LiveTranscript, and for slices in one of the configured source
-// languages (default: German) asks an LLM for a translation into the target language (default: Polish),
-// segment by segment so timings survive, then publishes Contracts.Realtime.Media.LiveTranscriptTranslation
-// on its own slug-routed exchange. The Api stores it next to the transcript; the subtitles site shows it.
+// languages (default: German) asks the provider — DeepL by default (free plan: 500k characters/month), or a
+// local/remote LLM over an OpenAI-compatible endpoint (Ollama, LiteLLM, …), or Anthropic — for a
+// translation into the target language (default: Polish), segment by segment so timings survive, then
+// publishes Contracts.Realtime.Media.LiveTranscriptTranslation on its own slug-routed exchange. The Api
+// stores it next to the transcript; the subtitles site shows it.
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.AddServiceDefaults();
@@ -15,17 +17,18 @@ builder.AddServiceDefaults();
 var opts = builder.Configuration.GetSection(TranslatorOptions.Section).Get<TranslatorOptions>() ?? new TranslatorOptions();
 opts.Validate();
 builder.Services.AddSingleton(opts);
-builder.Services.AddSingleton(opts.Llm);
+builder.Services.AddSingleton(opts.Provider);
 
-builder.Services.AddHttpClient("llm", c => c.Timeout = TimeSpan.FromSeconds(opts.Llm.TimeoutSeconds + 5));
+builder.Services.AddHttpClient("provider", c => c.Timeout = TimeSpan.FromSeconds(opts.Provider.TimeoutSeconds + 5));
 builder.Services.AddSingleton<ITranslator>(sp =>
 {
-    var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("llm");
-    return opts.Llm.NormalizedProvider switch
+    var http = sp.GetRequiredService<IHttpClientFactory>().CreateClient("provider");
+    return opts.Provider.NormalizedName switch
     {
-        "anthropic" => new AnthropicTranslator(http, opts.Llm),
-        "openai" => new OpenAiCompatibleTranslator(http, opts.Llm),
-        _ => new StubTranslator(opts.Llm),
+        "deepl" => new DeepLTranslator(http, opts.Provider),
+        "openai" => new OpenAiCompatibleTranslator(http, opts.Provider),
+        "anthropic" => new AnthropicTranslator(http, opts.Provider),
+        _ => new StubTranslator(opts.Provider),
     };
 });
 
@@ -64,10 +67,12 @@ builder.Services.AddMassTransit(x =>
 });
 
 var host = builder.Build();
+var translator = host.Services.GetRequiredService<ITranslator>();
 host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Translator").LogInformation(
-    "Translator starting — {Src} → {Dst}; channels: {Channels}; provider {Provider} ({Model}); min confidence {Conf}; max age {Age}s; queue '{Queue}'",
+    "Translator starting — {Src} → {Dst}; channels: {Channels}; provider {Provider} at {Url}; min confidence {Conf}; max age {Age}s; queue '{Queue}'",
     string.Join(",", opts.NormalizedSourceLanguages), opts.NormalizedTargetLanguage,
     opts.NormalizedChannels.Length == 0 ? "ALL" : string.Join(",", opts.NormalizedChannels),
-    opts.Llm.NormalizedProvider, opts.Llm.EffectiveModel, opts.MinConfidence, opts.MaxAgeSeconds, opts.EffectiveQueueName);
+    translator.Name, opts.Provider.NormalizedName == "stub" ? "(no network)" : opts.Provider.EffectiveBaseUrl,
+    opts.MinConfidence, opts.MaxAgeSeconds, opts.EffectiveQueueName);
 
 await host.RunAsync();

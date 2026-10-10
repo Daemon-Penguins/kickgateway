@@ -1,11 +1,24 @@
 namespace TailoredApps.KickGateway.Subscribers.Translator.Translation;
 
-/// <summary>One provider call: numbered segment texts in, the raw model output out.</summary>
+/// <summary>One slice to translate: its segment texts, in order.</summary>
+public sealed record TranslationRequest(string SourceLanguage, string TargetLanguage, IReadOnlyList<string> Lines);
+
+/// <summary>
+/// What a provider returned. <see cref="Aligned"/> has one translation per input line (same order) when the
+/// provider kept the lines apart; otherwise it is null and <see cref="Whole"/> carries the slice as one text.
+/// </summary>
+public sealed record TranslationResult(string[]? Aligned, string Whole)
+{
+    public static TranslationResult FromAligned(string[] lines) => new(lines, string.Join(' ', lines.Select(l => l.Trim()).Where(l => l.Length > 0)));
+    public static TranslationResult FromWhole(string text) => new(null, text.Trim());
+    public bool IsEmpty => Whole.Length == 0;
+}
+
+/// <summary>One provider call. Throws on failure (the consumer logs and skips the slice).</summary>
 public interface ITranslator
 {
-    /// <summary>Provider/model label stamped on the published translation, e.g. <c>anthropic/claude-haiku-5-5</c>.</summary>
+    /// <summary>Provider/model label stamped on the published translation, e.g. <c>deepl/free</c> or <c>openai/qwen2.5:7b</c>.</summary>
     string Name { get; }
 
-    /// <summary>Returns the model's raw text for <paramref name="numberedLines"/>, or throws (the consumer logs and skips the slice).</summary>
-    Task<string> TranslateAsync(string systemPrompt, string numberedLines, CancellationToken ct);
+    Task<TranslationResult> TranslateAsync(TranslationRequest request, CancellationToken ct);
 }

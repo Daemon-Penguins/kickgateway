@@ -56,6 +56,10 @@ public static partial class TranslationPrompt
         return result;
     }
 
+    /// <summary>Aligned when the model kept the numbering, else the whole text as one segment.</summary>
+    public static TranslationResult ToResult(string? output, int count) =>
+        ParseNumbered(output, count) is { } aligned ? TranslationResult.FromAligned(aligned) : TranslationResult.FromWhole(Unnumbered(output));
+
     /// <summary>Everything the provider wrote, with any numbering stripped — the whole-slice fallback.</summary>
     public static string Unnumbered(string? output)
     {
