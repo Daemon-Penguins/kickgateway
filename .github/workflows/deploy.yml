@@ -275,6 +275,9 @@ jobs:
                 - Transcriber__Model=${TRANSCRIBER_MODEL:-LargeV3Turbo}
                 - Transcriber__Quantization=${TRANSCRIBER_QUANTIZATION:-Q5_0}
                 - Transcriber__Language=${TRANSCRIBER_LANGUAGE:-pl}
+                - Transcriber__Languages=${TRANSCRIBER_LANGUAGES-pl,en,de}
+                - Transcriber__LanguageSwitchMinProbability=${TRANSCRIBER_LANGUAGE_MIN_PROBABILITY:-0.7}
+                - Transcriber__LanguageSwitchConfirmChunks=${TRANSCRIBER_LANGUAGE_CONFIRM_CHUNKS:-2}
                 - Transcriber__Threads=${TRANSCRIBER_THREADS:-0}
                 - Transcriber__WriteFiles=${TRANSCRIBER_WRITE_FILES:-false}
                 - Transcriber__ModelDir=/models
@@ -321,6 +324,9 @@ jobs:
           TRANSCRIBER_MODEL=${{ vars.TRANSCRIBER_MODEL }}
           TRANSCRIBER_QUANTIZATION=${{ vars.TRANSCRIBER_QUANTIZATION }}
           TRANSCRIBER_LANGUAGE=${{ vars.TRANSCRIBER_LANGUAGE }}
+          TRANSCRIBER_LANGUAGES=${{ vars.TRANSCRIBER_LANGUAGES || 'pl,en,de' }}
+          TRANSCRIBER_LANGUAGE_MIN_PROBABILITY=${{ vars.TRANSCRIBER_LANGUAGE_MIN_PROBABILITY }}
+          TRANSCRIBER_LANGUAGE_CONFIRM_CHUNKS=${{ vars.TRANSCRIBER_LANGUAGE_CONFIRM_CHUNKS }}
           TRANSCRIBER_THREADS=${{ vars.TRANSCRIBER_THREADS }}
           TRANSCRIBER_WRITE_FILES=${{ vars.TRANSCRIBER_WRITE_FILES }}
           ENVFILE"

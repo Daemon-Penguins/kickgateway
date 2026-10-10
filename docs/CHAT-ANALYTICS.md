@@ -164,13 +164,15 @@ message is a gap, and there is nothing to rebuild from.
 
 | Endpoint | Returns |
 |---|---|
-| `GET /channels/{slug}/transcripts?from&to&q&cursor&limit` | slices overlapping the window, oldest first; `q` = substring match on the text; keyset `cursor` (max `limit` 500) |
+| `GET /channels/{slug}/transcripts?from&to&q&language&cursor&limit` | slices overlapping the window, oldest first; `q` = substring match on the text; `language` = ISO-639-1 filter (e.g. `de`); keyset `cursor` (max `limit` 500) |
 | `GET /channels/{slug}/transcripts/at?at=<ISO-8601>&tolerance=20` | what was being said at that moment (+/- tolerance seconds), e.g. pass a chat message's `createdAt` |
 
 Each item carries `startedAt`/`endedAt` (estimated UTC stream time, +/- one HLS segment),
 `audioStartSeconds` (the transcriber's per-channel audio clock, for ordering/gap detection), the
-`text`, per-segment `segments[]` with their own times, `confidence`, `firstMediaSequence`/
-`lastMediaSequence` (HLS provenance), `model`, `transcribedAt` and `processingSeconds`.
+`text`, `language` (the language the slice was transcribed in), `detectedLanguage` and
+`languageProbability` (what Whisper's detector heard on the slice and how sure it was; `null` when the
+transcriber ran with a fixed language), per-segment `segments[]` with their own times, `confidence`,
+`firstMediaSequence`/`lastMediaSequence` (HLS provenance), `model`, `transcribedAt` and `processingSeconds`.
 
 Chronology with chat: everything is UTC on the gateway's clock, so `startedAt`/`endedAt` sort
 together with `ChatMessages.CreatedAt` and the inboxes' `ReceivedAt`. Expect chat *reactions* to

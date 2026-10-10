@@ -40,8 +40,22 @@ public record LiveTranscript
     /// <summary>The recognized text of the whole slice (segments joined with a space), trimmed.</summary>
     public string Text { get; init; } = "";
 
-    /// <summary>ISO-639-1 language of the speech (configured, or detected when the transcriber runs in auto mode).</summary>
+    /// <summary>
+    /// ISO-639-1 language the slice was transcribed in. With language detection on (the default:
+    /// <c>Transcriber:Languages</c>) this is the channel's current language — switched when the detector is
+    /// confident, kept when it is not; otherwise the configured language, or Whisper's own pick in <c>auto</c> mode.
+    /// </summary>
     public string Language { get; init; } = "";
+
+    /// <summary>
+    /// What Whisper's language detector heard on this slice (ISO-639-1), when detection ran; null otherwise
+    /// (fixed language, slice too short to judge). Can differ from <see cref="Language"/>: an unsure reading
+    /// does not switch the channel, so the text is still in the previous language.
+    /// </summary>
+    public string? DetectedLanguage { get; init; }
+
+    /// <summary>Detector probability for <see cref="DetectedLanguage"/>, 0..1; null when detection did not run.</summary>
+    public float? LanguageProbability { get; init; }
 
     /// <summary>Average token probability over the kept segments, 0..1 (0 when unknown).</summary>
     public float Confidence { get; init; }

@@ -221,7 +221,10 @@ push) returns to the pipeline-managed version.
 | `TRANSCRIBER_ENABLED` | Optional. `true` runs the CPU-only `transcriber` container on the VPS (compose profile). Default off: run exactly **one** transcriber per channel - two producers store every sentence twice. |
 | `TRANSCRIBER_MODEL` | Optional. Whisper GGML model for the CPU-only `transcriber` container: `LargeV3Turbo` (default, best quality, needs a strong CPU), `Medium`, `Small` (~6x cheaper), `Base`. Watch the logs for `slower than real time` / dropped chunks. |
 | `TRANSCRIBER_QUANTIZATION` | Optional. `Q5_0` (default), `Q8_0` or `NoQuantization`. |
-| `TRANSCRIBER_LANGUAGE` | Optional. Whisper language code, default `pl`; `auto` detects per chunk. |
+| `TRANSCRIBER_LANGUAGE` | Optional. Starting / fallback language, default `pl`: a channel is transcribed in it until the detector is confident about another candidate. `auto` = Whisper's unrestricted per-chunk pick (no candidates, no stickiness). |
+| `TRANSCRIBER_LANGUAGES` | Optional. Comma-separated candidate languages for per-chunk detection, default `pl,en,de`. Every chunk is run through Whisper's language detector restricted to these codes (one extra encoder pass, ~0.5 s on a GPU); a confident reading switches the channel's language, an unsure one keeps it. Empty = fixed `TRANSCRIBER_LANGUAGE`. The transcript carries `language` (used) and `detectedLanguage`/`languageProbability` (heard). |
+| `TRANSCRIBER_LANGUAGE_MIN_PROBABILITY` | Optional. Detector probability a reading needs to count towards a switch, default `0.7`. |
+| `TRANSCRIBER_LANGUAGE_CONFIRM_CHUNKS` | Optional. Consecutive confident chunks of the same other language before a channel switches, default `2` (one-off chunks of music or a clip never flip it; a genuine switch lags one chunk). |
 | `TRANSCRIBER_THREADS` | Optional. Whisper CPU threads, default `0` = auto (cores minus 2, clamped 4..16). |
 | `TRANSCRIBER_WRITE_FILES` | Optional. `true` also appends per-channel `.txt`/`.jsonl` files into the `transcriber-transcripts` volume. Default `false` - the api's `LiveTranscripts` table is the record. |
 
@@ -338,6 +341,8 @@ Running the transcriber itself (Aspire starts it for you; standalone):
 dotnet run --project src/TailoredApps.KickGateway.Subscribers.Transcriber
 # Channels, language, model, GPU, output dir — see the "Transcriber" section in its appsettings.json,
 # e.g. Transcriber__Channels__0=xqc Transcriber__Language=en Transcriber__Model=Small Transcriber__UseGpu=false
+# Language detection: Transcriber__Languages=pl,en,de (candidates; default) + Transcriber__Language=pl (start/fallback);
+# Transcriber__Languages= (empty) pins the language instead.
 ```
 
 On the VPS `deploy.yml` can run it as the `transcriber` compose service (opt-in via the
@@ -362,7 +367,7 @@ for the transcriber (the broker is the integration point, so it can run anywhere
 ```sh
 brew install ffmpeg && brew install --cask dotnet-sdk
 mkdir -p ~/.config/kickgateway && cp deploy/macos/transcriber.env.example ~/.config/kickgateway/transcriber.env
-$EDITOR ~/.config/kickgateway/transcriber.env      # RabbitMq__*, model, language, optional channel list
+$EDITOR ~/.config/kickgateway/transcriber.env      # RabbitMq__*, model, languages (candidates + fallback), optional channel list
 deploy/macos/install-transcriber.sh                # re-run after git pull to update
 tail -f ~/Library/Logs/kickgateway/transcriber.log
 ```

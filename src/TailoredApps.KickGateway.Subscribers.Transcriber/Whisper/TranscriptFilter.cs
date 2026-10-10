@@ -8,15 +8,20 @@ namespace TailoredApps.KickGateway.Subscribers.Transcriber.Whisper;
 /// Decides whether a Whisper segment is real speech worth publishing. Whisper hallucinates on
 /// silence and music — subtitle credits, "thanks for watching", a word repeated twenty times,
 /// bracketed sound tags — so segments are dropped when they are blank, non-speech tags only,
-/// essentially one of the configured suppress phrases, degenerate repetition, or below the
-/// confidence floor. Pure.
+/// essentially one of the configured suppress phrases, an echo of the profanity prompt, degenerate
+/// repetition, or below the confidence floor. Pure.
 /// </summary>
 public sealed partial class TranscriptFilter
 {
     private readonly float _minConfidence;
     private readonly string[] _suppress;
+    private readonly HashSet<string> _promptWords;
 
-    public TranscriptFilter(float minConfidence, IEnumerable<string> suppressPhrases)
+    /// <param name="promptWords">
+    /// Words of the initial prompt Whisper is known to read back on noise (the profanity list). A segment that
+    /// is mostly these words, or repeats one of them three times, is a prompt echo, not speech.
+    /// </param>
+    public TranscriptFilter(float minConfidence, IEnumerable<string> suppressPhrases, IEnumerable<string>? promptWords = null)
     {
         _minConfidence = minConfidence;
         _suppress = suppressPhrases
@@ -24,6 +29,9 @@ public sealed partial class TranscriptFilter
             .Where(p => p.Length > 0)
             .Distinct()
             .ToArray();
+        _promptWords = (promptWords ?? [])
+            .SelectMany(w => Normalize(w).Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            .ToHashSet(StringComparer.Ordinal);
     }
 
     /// <summary>Returns true when the segment should be kept; otherwise <paramref name="reason"/> says why it was dropped.</summary>
@@ -52,6 +60,12 @@ public sealed partial class TranscriptFilter
                 reason = "suppressed-phrase";
                 return false;
             }
+        }
+
+        if (IsPromptEcho(normalized))
+        {
+            reason = "prompt-echo";
+            return false;
         }
 
         if (IsRepetitive(normalized))
@@ -120,6 +134,22 @@ public sealed partial class TranscriptFilter
             }
         }
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Seeded by the profanity prompt, Whisper fills music/noise with the prompt itself: the same prompt
+    /// word three or more times ("pojebane, pojebane, pojebane"), or a segment of at least four words
+    /// that is at least half prompt vocabulary ("Kurwa, chuj, pierdolic, jebac, zajebiscie"). A swear
+    /// word or two inside a real sentence passes.
+    /// </summary>
+    public bool IsPromptEcho(string normalized)
+    {
+        if (_promptWords.Count == 0) return false;
+        var words = normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var hits = words.Where(_promptWords.Contains).ToList();
+        if (hits.Count == 0) return false;
+        if (hits.GroupBy(w => w).Any(g => g.Count() >= 3)) return true;
+        return words.Length >= 4 && hits.Count * 2 >= words.Length;
     }
 
     /// <summary>

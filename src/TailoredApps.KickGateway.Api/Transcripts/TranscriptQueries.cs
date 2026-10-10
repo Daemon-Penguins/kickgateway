@@ -20,6 +20,8 @@ public sealed record TranscriptDto(
     double AudioSeconds,
     string Text,
     string Language,
+    string? DetectedLanguage,
+    float? LanguageProbability,
     float Confidence,
     IReadOnlyList<TranscriptSegmentDto> Segments,
     long FirstMediaSequence,
@@ -28,8 +30,8 @@ public sealed record TranscriptDto(
     DateTime TranscribedAt,
     double ProcessingSeconds);
 
-/// <summary>A page of transcripts, oldest first. Pass <see cref="NextCursor"/> back as <c>cursor</c> for the next page.</summary>
-public sealed record TranscriptPage(string Channel, AnalyticsWindow Window, string? Query, IReadOnlyList<TranscriptDto> Items, string? NextCursor);
+/// <summary>A page of transcripts, oldest first. Pass <see cref="NextCursor"/> back as <c>cursor</c> for the next page. <see cref="Language"/> echoes the language filter, if any.</summary>
+public sealed record TranscriptPage(string Channel, AnalyticsWindow Window, string? Query, string? Language, IReadOnlyList<TranscriptDto> Items, string? NextCursor);
 
 /// <summary>JSON shape used both for the stored <see cref="LiveTranscriptRecord.SegmentsJson"/> and for reading it back.</summary>
 public static class TranscriptJson
@@ -57,10 +59,11 @@ public static class TranscriptQueries
 {
     /// <summary>
     /// Transcripts of <paramref name="channel"/> overlapping <paramref name="window"/>, oldest first.
-    /// <paramref name="query"/> is a case-insensitive substring match on the text (SQL <c>LIKE</c>).
+    /// <paramref name="query"/> is a case-insensitive substring match on the text (SQL <c>LIKE</c>);
+    /// <paramref name="language"/> keeps only slices transcribed in that ISO-639-1 language.
     /// </summary>
     public static async Task<TranscriptPage> PageAsync(
-        KickGatewayDbContext db, string channel, AnalyticsWindow window, string? query, string? cursor, int limit, CancellationToken ct)
+        KickGatewayDbContext db, string channel, AnalyticsWindow window, string? query, string? language, string? cursor, int limit, CancellationToken ct)
     {
         IQueryable<LiveTranscriptRecord> q = db.LiveTranscripts.AsNoTracking()
             .Where(x => x.ChannelSlug == channel && x.StartedAt < window.To);
@@ -72,6 +75,9 @@ public static class TranscriptQueries
             var pattern = "%" + EscapeLike(text) + "%";
             q = q.Where(x => EF.Functions.Like(x.Text, pattern, "\\"));
         }
+
+        var lang = string.IsNullOrWhiteSpace(language) ? null : language.Trim().ToLowerInvariant();
+        if (lang is not null) q = q.Where(x => x.Language == lang);
 
         if (TryParseCursor(cursor, out var afterStarted, out var afterId))
             q = q.Where(x => x.StartedAt > afterStarted || (x.StartedAt == afterStarted && x.Id > afterId));
@@ -86,7 +92,7 @@ public static class TranscriptQueries
             next = FormatCursor(last.StartedAt, last.Id);
         }
 
-        return new TranscriptPage(channel, window, text, rows.Select(ToDto).ToList(), next);
+        return new TranscriptPage(channel, window, text, lang, rows.Select(ToDto).ToList(), next);
     }
 
     /// <summary>What was being said on <paramref name="channel"/> at <paramref name="at"/> (± <paramref name="toleranceSeconds"/>), oldest first.</summary>
@@ -104,7 +110,7 @@ public static class TranscriptQueries
     }
 
     public static TranscriptDto ToDto(LiveTranscriptRecord r) => new(
-        r.Id, r.ChannelSlug, r.StartedAt, r.EndedAt, r.AudioStartSeconds, r.AudioSeconds, r.Text, r.Language, r.Confidence,
+        r.Id, r.ChannelSlug, r.StartedAt, r.EndedAt, r.AudioStartSeconds, r.AudioSeconds, r.Text, r.Language, r.DetectedLanguage, r.LanguageProbability, r.Confidence,
         TranscriptJson.ReadSegments(r.SegmentsJson), r.FirstMediaSequence, r.LastMediaSequence, r.Model, r.TranscribedAt, r.ProcessingSeconds);
 
     private static string FormatCursor(DateTime startedAt, long id) =>

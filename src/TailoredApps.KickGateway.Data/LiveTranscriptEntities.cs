@@ -46,8 +46,16 @@ public class LiveTranscriptRecord
     [MaxLength(4000)]
     public string Text { get; set; } = "";
 
+    /// <summary>ISO-639-1 language the slice was transcribed in (the channel's sticky language when detection is on).</summary>
     [MaxLength(16)]
     public string Language { get; set; } = "";
+
+    /// <summary>What the detector heard on this slice; null when detection did not run. May differ from <see cref="Language"/> (unsure reading kept the previous language).</summary>
+    [MaxLength(16)]
+    public string? DetectedLanguage { get; set; }
+
+    /// <summary>Detector probability for <see cref="DetectedLanguage"/>, 0..1; null when detection did not run.</summary>
+    public float? LanguageProbability { get; set; }
 
     /// <summary>Average token probability 0..1 (0 = unknown).</summary>
     public float Confidence { get; set; }

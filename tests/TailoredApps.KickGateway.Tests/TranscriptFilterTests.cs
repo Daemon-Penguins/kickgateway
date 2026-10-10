@@ -116,4 +116,38 @@ public class TranscriptFilterTests
     [InlineData("Amara.org", "amara org")]
     public void Normalize_strips_punctuation_case_and_diacritics(string input, string expected)
         => Assert.Equal(expected, TranscriptFilter.Normalize(input));
+
+    // ---- prompt echo (seen live: on music Whisper reads the profanity prompt back) ----
+
+    private static TranscriptFilter WithPrompt() =>
+        new(0.35f, [], ["Kurwa, chuj, pierdolić, jebać, zajebiście, spierdalaj, pojebane.", "Fuck, shit, bitch, asshole, motherfucker."]);
+
+    [Theory]
+    [InlineData("Dziś, niebezpieczna, pojebane, pojebane, pojebane.")]           // one prompt word three times
+    [InlineData("Fuck, shit, bitch, shit, bitch, shit, bitch, shit, bitch.")]      // not caught by IsRepetitive (3 distinct of 9)
+    [InlineData("Kukurwa, chuj, pierdolić, jebać, zajebiście, spierdalaj, pojebane.")] // the prompt read back almost verbatim
+    [InlineData("Kurwa, jebać, no, pojebane.")]                                   // 4 words, 3 from the prompt
+    public void Prompt_echo_is_dropped(string text)
+    {
+        Assert.False(WithPrompt().Accept(text, 0.9f, out var reason));
+        Assert.Equal("prompt-echo", reason);
+    }
+
+    [Theory]
+    [InlineData("Kurwa, nie wierzę, że to zrobił.")]            // one swear word in a real sentence
+    [InlineData("No kurwa, chuj z tym, idziemy dalej.")]       // two of six - speech, not an echo
+    [InlineData("Pojebane.")]                                    // a single word is never judged
+    [InlineData("Shit, that was close, chat.")]
+    public void Real_speech_with_profanity_passes(string text)
+    {
+        Assert.True(WithPrompt().Accept(text, 0.9f, out var reason), reason);
+    }
+
+    [Fact]
+    public void Without_prompt_words_the_rule_is_inert()
+    {
+        var plain = new TranscriptFilter(0.35f, []);
+        Assert.True(plain.Accept("pojebane, pojebane, pojebane, pojebane.", 0.9f, out _));
+        Assert.False(plain.IsPromptEcho("pojebane pojebane pojebane"));
+    }
 }

@@ -75,7 +75,9 @@ public sealed class LiveTranscriptConsumer : IConsumer<LiveTranscript>
             AudioStartSeconds = m.AudioStartSeconds,
             AudioSeconds = m.AudioSeconds,
             Text = text,
-            Language = m.Language ?? "",
+            Language = Code(m.Language) ?? "",
+            DetectedLanguage = Code(m.DetectedLanguage),
+            LanguageProbability = m.LanguageProbability is { } p ? Math.Clamp(p, 0f, 1f) : null,
             Confidence = m.Confidence,
             SegmentsJson = TranscriptJson.SerializeSegments(segments),
             SegmentCount = segments.Length,
@@ -86,6 +88,14 @@ public sealed class LiveTranscriptConsumer : IConsumer<LiveTranscript>
             ProcessingSeconds = m.ProcessingSeconds,
             ReceivedAt = DateTime.UtcNow,
         };
+    }
+
+    /// <summary>Language codes are stored lowercase and clipped to the column (Whisper ids are 2–3 letters).</summary>
+    private static string? Code(string? language)
+    {
+        if (string.IsNullOrWhiteSpace(language)) return null;
+        var code = language.Trim().ToLowerInvariant();
+        return code.Length > 16 ? code[..16] : code;
     }
 
     // SQL Server: 2627 = unique constraint, 2601 = unique index.
