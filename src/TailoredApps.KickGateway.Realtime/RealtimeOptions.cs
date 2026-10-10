@@ -52,7 +52,7 @@ public class RealtimeOptions
         public bool Enabled { get; set; } = false;
 
         /// <summary>Prefer the highest variant at or below this bitrate (kbps). 0 = highest available.</summary>
-        public int MaxBitrateKbps { get; set; } = 3500;
+        public int MaxBitrateKbps { get; set; } = 1500;
 
         /// <summary>Drop (and warn on) any segment larger than this. Guards against oversized broker messages.</summary>
         public int MaxSegmentBytes { get; set; } = 6 * 1024 * 1024;

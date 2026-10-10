@@ -167,8 +167,17 @@ Status: actively developed.
   resumes). The page embeds Kick's own player (`player.kick.com` iframe): Kick's IVS playback token
   carries `aws:access-control-allow-origin` = kick.com origins only (verified 2026-10-10 - a foreign
   Origin gets no ACAO header), so a self-hosted/delayed player would need the VPS to relay video.
-  We don't; captions simply trail the picture by ~ChunkSeconds + inference - player buffer (use 5 s
-  chunks for ~2-4 s). Assets live under `/_/` so they can't collide with a slug; slugs are validated
+  The public page doesn't; captions trail the picture by ~ChunkSeconds + inference - player buffer (use
+  5 s chunks for ~2-4 s). The ONE exception is the token-gated **delayed player** (`/{slug}/player?token=`,
+  `Subtitles:Relay`): the listener already pulls the live HLS for transcription, so `VideoRelay` keeps
+  the last ~90 s of `LiveVideoSegment` per channel in memory and serves it as a live playlist
+  (`HlsPlaylist`: our own contiguous numbering, `#EXT-X-DISCONTINUITY` on a hole or a Kick discontinuity,
+  `#EXT-X-PROGRAM-DATE-TIME` = `CapturedAt - Duration` = the transcriber's `SegmentTimeline` clock) and
+  the page's hls.js sits `delay` s behind the edge, timing captions on `hls.playingDate`. Video then
+  leaves the VPS at the captured bitrate per viewer, hence: off without `Subtitles:Relay:Token`, viewer
+  cap per channel (`cid` on playlist polls, 429 beyond), served-bytes log every 5 min, and the capture
+  cap `Kick:Realtime:Video:MaxBitrateKbps` lowered to 1500 (~480p; audio is identical for Whisper).
+  Assets live under `/_/` so they can't collide with a slug; slugs are validated
   (`[a-z0-9_-]{1,64}`) before reaching the player URL or a queue binding. No DB, no auth (public like
   `/obs/clips`; `Subtitles:Channels` is the allowlist). `SubtitleEvent.Translations` is the reserved slot
   for the translation layer (target language -> text); the page already has the track selector.

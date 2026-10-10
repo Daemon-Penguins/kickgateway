@@ -230,6 +230,8 @@ push) returns to the pipeline-managed version.
 | `TRANSCRIBER_WRITE_FILES` | Optional. `true` also appends per-channel `.txt`/`.jsonl` files into the `transcriber-transcripts` volume. Default `false` - the api's `LiveTranscripts` table is the record. |
 | `SUBTITLES_ENABLED` | Optional. `true` runs the `subtitles` container (compose profile): the live-subtitles site at `https://${SUBTITLES_HOST}/{slug}`. Needs the `SUBTITLES_HOST` secret and a transcriber publishing somewhere. |
 | `SUBTITLES_CHANNELS` | Optional. Comma-separated slugs the subtitles site serves (and the only transcripts it receives). Empty = any channel. |
+| `SUBTITLES_RELAY_MAX_VIEWERS` | Optional. Concurrent viewers per channel on the delayed player, default `3`. Each viewer costs the captured bitrate in outbound transfer. |
+| `REALTIME_VIDEO_MAX_BITRATE_KBPS` | Optional. The realtime listener captures the highest HLS rendition under this cap, default `1500` (~480p). Audio for the transcriber is the same at any rendition; the subtitles relay serves exactly this rendition. |
 
 **Secrets** (Settings → Secrets and variables → Actions → Secrets):
 
@@ -239,6 +241,7 @@ push) returns to the pipeline-managed version.
 | `DEPLOY_HOST` / `DEPLOY_USER` / `DEPLOY_SSH_KEY` | SSH into the VPS |
 | `PUBLIC_HOST` | Fully qualified hostname for the public URL (`example.com`) |
 | `SUBTITLES_HOST` | Optional (with `SUBTITLES_ENABLED`). Hostname of the live-subtitles site (`subtitles.example.com`); needs its own DNS A record → VPS, Traefik issues the certificate. |
+| `SUBTITLES_RELAY_TOKEN` | Optional. Enables the delayed player (`/{slug}/player?token=…`): at least 16 random characters. Empty = relay off, the public iframe page still works. |
 | `KICK_WEBHOOK_URL` | Full webhook URL Kick will POST to (`https://example.com/api/webhooks/kick`) |
 | `DB_CONNECTION_STRING` | `Server=…,1433;Database=kickgateway;User Id=…;Password=…;TrustServerCertificate=true;Encrypt=false` |
 | `RABBITMQ_HOST` / `RABBITMQ_PORT` / `RABBITMQ_VHOST` / `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | broker (private vhost recommended) |
@@ -412,6 +415,17 @@ dotnet run --project src/TailoredApps.KickGateway.Subtitles   # http://localhost
 The event JSON carries `language`, `detectedLanguage`, `languageProbability`, `confidence`, the
 segments and an empty `translations` slot — the planned translation layer fills it per target
 language and the page's track selector switches between the original and the translation.
+
+**Delayed player (relay).** `GET /{slug}/player?token=…&delay=15` is the token-gated variant with
+the video 15 s behind live and captions timed exactly. The realtime listener already pulls the live
+HLS for transcription (`LiveVideoSegment`, highest rendition under `REALTIME_VIDEO_MAX_BITRATE_KBPS`);
+the subtitles service keeps the last ~90 s per channel in memory and serves it as a live playlist
+(`/{slug}/hls/playlist.m3u8`, contiguous numbering, `#EXT-X-DISCONTINUITY` on holes,
+`#EXT-X-PROGRAM-DATE-TIME` = `CapturedAt − Duration`, i.e. the transcriber's clock) that the page's
+hls.js positions `delay` seconds behind the edge; captions are shown when `hls.playingDate` enters a
+segment's window. This is the only path where video leaves the VPS, so it is off without
+`SUBTITLES_RELAY_TOKEN`, capped at `SUBTITLES_RELAY_MAX_VIEWERS` per channel (429 beyond), and the
+service logs served megabytes per channel every 5 minutes. Budget: ~0.7 GB/h per viewer at 1500 kbps.
 
 ## Notes
 

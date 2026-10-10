@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>z napisami · opóźniony player</title>
+<link rel="stylesheet" href="/_/watch.css">
+<link rel="stylesheet" href="/_/player.css">
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.7.3/dist/hls.min.js" integrity="sha384-cciJ0zi8d1uMKC2zJd7jvPY4HQt7W4ByUI/FlMkltvBi31aW61rcpVBhpmW8/NwX" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="stage" class="stage">
+  <video id="video" class="player" playsinline muted autoplay></video>
+
+  <div id="waiting" class="waiting"><div class="spinner"></div><div id="waiting-text">łączenie…</div></div>
+
+  <div id="captions" class="captions" aria-live="polite">
+    <div id="prev" class="line prev"></div>
+    <div id="cur" class="line cur"></div>
+  </div>
+
+  <div id="hud" class="hud">
+    <div class="hud-left">
+      <span id="status" class="dot connecting" title="łączenie…"></span>
+      <span id="title" class="slug"></span>
+      <span id="behind" class="lag" title="o ile obraz jest za live"></span>
+      <span id="sync" class="lag" title="czy napisy są zsynchronizowane z obrazem"></span>
+    </div>
+    <div class="hud-right">
+      <button id="unmute" title="włącz dźwięk">🔇</button>
+      <select id="delay" title="opóźnienie obrazu względem live">
+        <option value="10">−10 s</option>
+        <option value="15">−15 s</option>
+        <option value="20">−20 s</option>
+        <option value="30">−30 s</option>
+      </select>
+      <select id="track" title="ścieżka napisów">
+        <option value="original">oryginał</option>
+        <option value="pl" disabled>polski (wkrótce)</option>
+      </select>
+      <button id="smaller" title="mniejsze napisy">A−</button>
+      <button id="bigger" title="większe napisy">A+</button>
+      <button id="tags" title="pokaż / ukryj znacznik języka">[pl]</button>
+      <button id="history" title="historia">☰</button>
+      <button id="fullscreen" title="pełny ekran (z napisami)">⛶</button>
+    </div>
+  </div>
+
+  <aside id="panel" class="panel hidden">
+    <header><span>Ostatnie wypowiedzi</span><button id="close-panel" title="zamknij">×</button></header>
+    <ol id="log"></ol>
+  </aside>
+</div>
+<script src="/_/player.js"></script>
+</body>
+</html>
