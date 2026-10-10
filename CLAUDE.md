@@ -184,8 +184,10 @@ Status: actively developed.
   `TailoredApps.KickGateway.Subscribers.Translator` consumes `LiveTranscript` on a throwaway queue and, for
   slices whose `Language` is in `Translator:SourceLanguages` (default `de`) and not the target (`pl`),
   above `MinConfidence` (0.45) and younger than `MaxAgeSeconds` (120) (`TranslationPolicy`), sends the
-  segments as numbered lines (`TranslationPrompt`) to Anthropic Messages or any OpenAI-compatible
-  `/chat/completions` endpoint (`stub` = no network, for wiring) and publishes
+  segments to the provider (`Translator:Provider:Name`): DeepL by default (text array in, one translation
+  per line out, whole slice as `context`; free keys end with `:fx` and hit api-free), or an LLM via any
+  OpenAI-compatible `/chat/completions` endpoint (Ollama needs no key) or Anthropic - LLMs get numbered
+  lines (`TranslationPrompt`) and must echo the numbering; `stub` = no network, for wiring - and publishes
   `Contracts.Realtime.Media.LiveTranscriptTranslation` (translated segments keep the SOURCE timings; a
   broken numbering falls back to one segment for the slice) directly via the bus - no DB, no outbox.
   Correlation with the transcript is (slug, StartedAt, AudioStartSeconds) = the Api's `DedupeKey`

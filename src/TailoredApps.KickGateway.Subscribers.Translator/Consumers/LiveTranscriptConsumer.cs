@@ -7,8 +7,8 @@ namespace TailoredApps.KickGateway.Subscribers.Translator.Consumers;
 
 /// <summary>
 /// One transcript in → one provider call → one <see cref="LiveTranscriptTranslation"/> out (published
-/// directly — this service has no database, so no outbox). Segments go to the model as numbered lines
-/// and come back aligned, keeping the original timings; when the model breaks the numbering the whole
+/// directly — this service has no database, so no outbox). Segments go to the provider as separate lines
+/// and come back aligned, keeping the original timings; when a provider can't keep them apart the whole
 /// translation becomes a single segment spanning the slice. Failures are logged and the slice skipped.
 /// </summary>
 public sealed class LiveTranscriptConsumer(
@@ -34,19 +34,16 @@ public sealed class LiveTranscriptConsumer(
             segments = [new LiveTranscriptSegment { StartedAt = t.StartedAt, EndedAt = t.EndedAt, Text = t.Text, Confidence = t.Confidence }];
 
         var sw = Stopwatch.StartNew();
-        string output;
+        TranslationResult result;
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken);
-            cts.CancelAfter(TimeSpan.FromSeconds(opts.Llm.TimeoutSeconds));
-            output = await translator.TranslateAsync(
-                TranslationPrompt.SystemPrompt(source, target, opts.Llm.SystemPrompt),
-                TranslationPrompt.NumberedLines(segments.Select(s => s.Text).ToArray()),
-                cts.Token);
+            cts.CancelAfter(TimeSpan.FromSeconds(opts.Provider.TimeoutSeconds));
+            result = await translator.TranslateAsync(new TranslationRequest(source, target, segments.Select(s => s.Text.Trim()).ToArray()), cts.Token);
         }
         catch (OperationCanceledException) when (!context.CancellationToken.IsCancellationRequested)
         {
-            log.LogWarning("[{Slug}] translation timed out after {Sec}s — slice left untranslated", slug, opts.Llm.TimeoutSeconds);
+            log.LogWarning("[{Slug}] translation timed out after {Sec}s — slice left untranslated", slug, opts.Provider.TimeoutSeconds);
             return;
         }
         catch (Exception ex)
@@ -56,23 +53,17 @@ public sealed class LiveTranscriptConsumer(
         }
         sw.Stop();
 
-        var aligned = TranslationPrompt.ParseNumbered(output, segments.Length);
-        LiveTranscriptSegment[] translated;
-        if (aligned is not null)
+        if (result.IsEmpty)
         {
-            translated = segments.Select((s, i) => new LiveTranscriptSegment { StartedAt = s.StartedAt, EndedAt = s.EndedAt, Text = aligned[i], Confidence = s.Confidence }).ToArray();
+            log.LogWarning("[{Slug}] provider returned nothing usable — slice left untranslated", slug);
+            return;
         }
-        else
-        {
-            var whole = TranslationPrompt.Unnumbered(output);
-            if (whole.Length == 0)
-            {
-                log.LogWarning("[{Slug}] provider returned nothing usable — slice left untranslated", slug);
-                return;
-            }
-            log.LogDebug("[{Slug}] provider broke the numbering ({N} segments) — using one segment for the slice", slug, segments.Length);
-            translated = [new LiveTranscriptSegment { StartedAt = t.StartedAt, EndedAt = t.EndedAt, Text = whole, Confidence = t.Confidence }];
-        }
+
+        LiveTranscriptSegment[] translated = result.Aligned is { } aligned
+            ? segments.Select((s, i) => new LiveTranscriptSegment { StartedAt = s.StartedAt, EndedAt = s.EndedAt, Text = aligned[i].Trim(), Confidence = s.Confidence }).ToArray()
+            : [new LiveTranscriptSegment { StartedAt = t.StartedAt, EndedAt = t.EndedAt, Text = result.Whole, Confidence = t.Confidence }];
+        if (result.Aligned is null)
+            log.LogDebug("[{Slug}] provider did not keep the {N} lines apart — using one segment for the slice", slug, segments.Length);
 
         var message = new LiveTranscriptTranslation
         {
@@ -83,7 +74,7 @@ public sealed class LiveTranscriptConsumer(
             AudioStartSeconds = t.AudioStartSeconds,
             SourceLanguage = source,
             TargetLanguage = target,
-            Text = string.Join(' ', translated.Select(s => s.Text)),
+            Text = string.Join(' ', translated.Select(s => s.Text).Where(s => s.Length > 0)),
             Segments = translated,
             Provider = translator.Name,
             TranslatedAt = DateTime.UtcNow,
@@ -91,8 +82,8 @@ public sealed class LiveTranscriptConsumer(
         };
         await context.Publish(message, context.CancellationToken);
 
-        log.LogInformation("[{Slug}] {Src}→{Dst} in {Ms} ms{Aligned}: {Text}", slug, source, target, sw.ElapsedMilliseconds,
-            aligned is null ? " (unaligned)" : "", Preview(message.Text));
+        log.LogInformation("[{Slug}] {Src}→{Dst} via {Provider} in {Ms} ms{Aligned}: {Text}", slug, source, target, translator.Name, sw.ElapsedMilliseconds,
+            result.Aligned is null ? " (unaligned)" : "", Preview(message.Text));
     }
 
     private static string Preview(string? text) => text is null ? "" : text.Length <= 120 ? text : text[..117] + "...";

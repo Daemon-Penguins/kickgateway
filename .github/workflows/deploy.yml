@@ -310,10 +310,12 @@ jobs:
                 - "traefik.http.services.kickgateway-subtitles.loadbalancer.server.port=8080"
                 - "traefik.docker.network=traefik-public"
 
-            # Translator (OPT-IN via TRANSLATOR_ENABLED + TRANSLATOR_API_KEY): LiveTranscript slices in the configured
-            # source languages (default German) go to an LLM and come back as LiveTranscriptTranslation (default
-            # Polish) - stored by the api next to the transcript and shown by the subtitles site. One call per
-            # slice (~10-15 s of speech); slices below the confidence floor or older than two minutes are skipped.
+            # Translator (OPT-IN via TRANSLATOR_ENABLED): LiveTranscript slices in the configured source languages
+            # (default German) are translated into TRANSLATOR_TARGET_LANGUAGE (default Polish) and published as
+            # LiveTranscriptTranslation - stored by the api next to the transcript and shown by the subtitles site.
+            # Provider: deepl (default; free plan = 500k chars/month, key ends with :fx), openai (any
+            # /chat/completions endpoint - a local Ollama needs no key) or anthropic. One call per slice
+            # (~10-15 s of speech); slices below the confidence floor or older than two minutes are skipped.
             translator:
               image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-translator:${IMAGE_TAG:-latest}
               profiles: ["translator"]
@@ -328,10 +330,11 @@ jobs:
                 - Translator__SourceLanguages=${TRANSLATOR_SOURCE_LANGUAGES:-de}
                 - Translator__TargetLanguage=${TRANSLATOR_TARGET_LANGUAGE:-pl}
                 - Translator__Channels=${TRANSLATOR_CHANNELS:-}
-                - Translator__Llm__Provider=${TRANSLATOR_PROVIDER:-anthropic}
-                - Translator__Llm__ApiKey=${TRANSLATOR_API_KEY:-}
-                - Translator__Llm__Model=${TRANSLATOR_MODEL:-}
-                - Translator__Llm__BaseUrl=${TRANSLATOR_BASE_URL:-}
+                - Translator__Provider__Name=${TRANSLATOR_PROVIDER:-deepl}
+                - Translator__Provider__ApiKey=${TRANSLATOR_API_KEY:-}
+                - Translator__Provider__Model=${TRANSLATOR_MODEL:-}
+                - Translator__Provider__BaseUrl=${TRANSLATOR_BASE_URL:-}
+                - Translator__Provider__Formality=${TRANSLATOR_FORMALITY:-prefer_less}
               networks:
                 - default
 
@@ -423,6 +426,7 @@ jobs:
           TRANSLATOR_PROVIDER=${{ vars.TRANSLATOR_PROVIDER }}
           TRANSLATOR_MODEL=${{ vars.TRANSLATOR_MODEL }}
           TRANSLATOR_BASE_URL=${{ vars.TRANSLATOR_BASE_URL }}
+          TRANSLATOR_FORMALITY=${{ vars.TRANSLATOR_FORMALITY }}
           TRANSLATOR_SOURCE_LANGUAGES=${{ vars.TRANSLATOR_SOURCE_LANGUAGES }}
           TRANSLATOR_TARGET_LANGUAGE=${{ vars.TRANSLATOR_TARGET_LANGUAGE }}
           TRANSLATOR_CHANNELS=${{ vars.TRANSLATOR_CHANNELS }}
