@@ -164,8 +164,9 @@ message is a gap, and there is nothing to rebuild from.
 
 | Endpoint | Returns |
 |---|---|
-| `GET /channels/{slug}/transcripts?from&to&q&language&cursor&limit` | slices overlapping the window, oldest first; `q` = substring match on the text; `language` = ISO-639-1 filter (e.g. `de`); keyset `cursor` (max `limit` 500) |
-| `GET /channels/{slug}/transcripts/at?at=<ISO-8601>&tolerance=20` | what was being said at that moment (+/- tolerance seconds), e.g. pass a chat message's `createdAt` |
+| `GET /channels/{slug}/transcripts?from&to&q&language&cursor&limit&segments` | slices overlapping the window, oldest first; `q` = substring match on the text; `language` = ISO-639-1 filter (e.g. `de`); keyset `cursor` (max `limit` 500); `segments=false` = text only (no per-segment timings) |
+| `GET /channels/{slug}/transcripts/at?at=<ISO-8601>&tolerance=20&segments` | what was being said at that moment (+/- tolerance seconds), e.g. pass a chat message's `createdAt` |
+| `GET /channels/{slug}/timeline?from&to&at&before&after&include&minConfidence&cursor&limit` | speech + events + chat of the channel in one chronology (below) |
 
 Each item carries `startedAt`/`endedAt` (estimated UTC stream time, +/- one HLS segment),
 `audioStartSeconds` (the transcriber's per-channel audio clock, for ordering/gap detection), the
@@ -178,6 +179,37 @@ timed segments, when the translator produced one), per-segment `segments[]` with
 Chronology with chat: everything is UTC on the gateway's clock, so `startedAt`/`endedAt` sort
 together with `ChatMessages.CreatedAt` and the inboxes' `ReceivedAt`. Expect chat *reactions* to
 a sentence ~10-20 s after its `endedAt` (encoder/HLS latency plus the viewers' player delay).
+Do not order speech by the row's `receivedAt`: that is when the Api stored the slice, i.e. its
+end plus inference plus transit, 10-30 s after the words were said.
+
+### Channel timeline (speech + events + chat)
+
+`GET /channels/{slug}/timeline` answers "what did the streamer say and how did chat respond"
+without client-side joins: one list, oldest first, of
+
+| `kind` | Source | `at` | Extra fields |
+| --- | --- | --- | --- |
+| `speech` | `LiveTranscripts` | `startedAt` of the slice | `endedAt`, `language`, `confidence`, `translations` (target language → text) |
+| `event` | `ChatterEvents` | `occurredAt` | `eventKind` (`follow`, `subscription_new`, `subscription_renewal`, `subscription_gift`, `kicks_gift`, `reward_redemption`, `ban`, `timeout`, `message_deleted`, `unban`), `userId`, `counterpart`, `amount` |
+| `chat` | `ChatMessages` | `createdAt` | `userId`, `replyToMessageId`, `replyToUsername` |
+
+Common fields: `id` (transcript row id / event id / message id), `who` (the channel slug for
+speech - it is the stream's audio, streamer plus surroundings - and the username otherwise) and
+`text` (transcript, message content or event detail). At equal timestamps the order is speech,
+event, chat, so a slice is read before the chat written while it was being said.
+
+Parameters: `from`/`to` as elsewhere (default: the hour before `to`; `from=all` for an unbounded
+start), **or** `at` (ISO-8601 or a look-back like `15m`) with `before`/`after` seconds (default
+60/180) to read around one moment; `include` = comma-separated subset of `speech,chat,events`;
+`minConfidence` drops speech below it; `limit` 1-500 (default 200); `cursor` from `nextCursor`.
+Speech slices that start up to 120 s before the window but end inside it are included. The
+response's `chronology` string restates the timing conventions for machine readers.
+
+Cost: one page is at most three bounded index seeks - `(ChannelSlug, StartedAt)`,
+`(ChannelSlug, OccurredAt)`, `(ChannelSlug, CreatedAt)`, each `TOP limit+1` - plus one range read
+of the translations for the speech rows on the page, merged in memory. The keyset cursor is
+`(at, kind rank, id)`, so paging through many rows that share a second (chat has second precision)
+is exact. Like every analytics query it runs READ UNCOMMITTED and never touches the ingest paths.
 
 ## MCP server
 
@@ -186,7 +218,10 @@ a sentence ~10-20 s after its `endedAt` (encoder/HLS latency plus the viewers' p
 
 `analytics_status`, `list_channels`, `channel_overview`, `list_chatters`,
 `interaction_graph`, `find_chatters`, `chatter_profile`,
-`chatter_relationship`, `search_messages`, `message_context`.
+`chatter_relationship`, `search_messages`, `message_context`, and for channels
+with live transcripts `search_transcripts`, `transcript_at` and
+`stream_timeline` (speech + events + chat in one chronology). The transcript
+tools default to `segments=false` (text only) to keep responses small.
 
 ### Remote: the deployed `mcp` container (no local install)
 

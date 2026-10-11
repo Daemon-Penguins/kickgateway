@@ -63,9 +63,11 @@ public static class TranscriptQueries
     /// Transcripts of <paramref name="channel"/> overlapping <paramref name="window"/>, oldest first.
     /// <paramref name="query"/> is a case-insensitive substring match on the text (SQL <c>LIKE</c>);
     /// <paramref name="language"/> keeps only slices transcribed in that ISO-639-1 language.
+    /// <paramref name="includeSegments"/> = false leaves <c>segments</c> / <c>translatedSegments</c> empty (text only).
     /// </summary>
     public static async Task<TranscriptPage> PageAsync(
-        KickGatewayDbContext db, string channel, AnalyticsWindow window, string? query, string? language, string? cursor, int limit, CancellationToken ct)
+        KickGatewayDbContext db, string channel, AnalyticsWindow window, string? query, string? language, string? cursor, int limit, CancellationToken ct,
+        bool includeSegments = true)
     {
         IQueryable<LiveTranscriptRecord> q = db.LiveTranscripts.AsNoTracking()
             .Where(x => x.ChannelSlug == channel && x.StartedAt < window.To);
@@ -95,12 +97,12 @@ public static class TranscriptQueries
             next = FormatCursor(last.StartedAt, last.Id);
         }
 
-        return new TranscriptPage(channel, window, text, lang, rows.Select(r => ToDto(r, translations)).ToList(), next);
+        return new TranscriptPage(channel, window, text, lang, rows.Select(r => ToDto(r, translations, includeSegments)).ToList(), next);
     }
 
     /// <summary>What was being said on <paramref name="channel"/> at <paramref name="at"/> (± <paramref name="toleranceSeconds"/>), oldest first.</summary>
     public static async Task<IReadOnlyList<TranscriptDto>> AroundAsync(
-        KickGatewayDbContext db, string channel, DateTime at, double toleranceSeconds, CancellationToken ct)
+        KickGatewayDbContext db, string channel, DateTime at, double toleranceSeconds, CancellationToken ct, bool includeSegments = true)
     {
         var from = at.AddSeconds(-toleranceSeconds);
         var to = at.AddSeconds(toleranceSeconds);
@@ -110,7 +112,7 @@ public static class TranscriptQueries
             .Take(20)
             .ToListAsync(ct);
         var translations = await TranslationsForAsync(db, rows, ct);
-        return rows.Select(r => ToDto(r, translations)).ToList();
+        return rows.Select(r => ToDto(r, translations, includeSegments)).ToList();
     }
 
     /// <summary>Translations of <paramref name="rows"/> keyed by the transcript's dedupe key, one query.</summary>
@@ -125,7 +127,8 @@ public static class TranscriptQueries
 
     public static TranscriptDto ToDto(LiveTranscriptRecord r) => ToDto(r, null);
 
-    public static TranscriptDto ToDto(LiveTranscriptRecord r, ILookup<string, LiveTranscriptTranslationRecord>? translations)
+    /// <param name="includeSegments">false = text only: <c>segments</c> empty, <c>translatedSegments</c> omitted (the MCP default).</param>
+    public static TranscriptDto ToDto(LiveTranscriptRecord r, ILookup<string, LiveTranscriptTranslationRecord>? translations, bool includeSegments = true)
     {
         Dictionary<string, string>? texts = null;
         Dictionary<string, IReadOnlyList<TranscriptSegmentDto>>? segments = null;
@@ -134,14 +137,15 @@ public static class TranscriptQueries
             foreach (var t in translations[r.DedupeKey])
             {
                 texts ??= new Dictionary<string, string>(StringComparer.Ordinal);
-                segments ??= new Dictionary<string, IReadOnlyList<TranscriptSegmentDto>>(StringComparer.Ordinal);
                 texts[t.TargetLanguage] = t.Text;
+                if (!includeSegments) continue;
+                segments ??= new Dictionary<string, IReadOnlyList<TranscriptSegmentDto>>(StringComparer.Ordinal);
                 segments[t.TargetLanguage] = TranscriptJson.ReadSegments(t.SegmentsJson);
             }
         }
         return new TranscriptDto(
             r.Id, r.ChannelSlug, r.StartedAt, r.EndedAt, r.AudioStartSeconds, r.AudioSeconds, r.Text, r.Language, r.DetectedLanguage, r.LanguageProbability, r.Confidence,
-            TranscriptJson.ReadSegments(r.SegmentsJson), r.FirstMediaSequence, r.LastMediaSequence, r.Model, r.TranscribedAt, r.ProcessingSeconds, texts, segments);
+            includeSegments ? TranscriptJson.ReadSegments(r.SegmentsJson) : [], r.FirstMediaSequence, r.LastMediaSequence, r.Model, r.TranscribedAt, r.ProcessingSeconds, texts, segments);
     }
 
     private static string FormatCursor(DateTime startedAt, long id) =>

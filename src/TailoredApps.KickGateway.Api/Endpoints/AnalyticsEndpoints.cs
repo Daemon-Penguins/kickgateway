@@ -146,25 +146,57 @@ public static class AnalyticsEndpoints
         });
 
         // Live speech-to-text stored from Subscribers.Transcriber (see docs/CHAT-ANALYTICS.md).
-        g.MapGet("/channels/{slug}/transcripts", async (string slug, string? from, string? to, string? q, string? language, string? cursor, int? limit,
+        // segments=false drops the per-segment timings (the MCP server's default - a fraction of the payload).
+        g.MapGet("/channels/{slug}/transcripts", async (string slug, string? from, string? to, string? q, string? language, string? cursor, int? limit, bool? segments,
             ClaimsPrincipal user, KickGatewayDbContext db, IOptions<ChatAnalyticsOptions> o, CancellationToken ct) =>
         {
             if (!AnalyticsTime.TryResolveWindow(from, to, o.Value.DefaultWindowDays, DateTime.UtcNow, out var window, out var err)) return Bad(err);
             var scope = await AnalyticsScope.ForUserAsync(user, db, ct);
             var channel = Slug(slug);
             if (!scope.Allows(channel)) return ChannelNotFound(channel);
-            return Json(await TranscriptQueries.PageAsync(db, channel, window, q, language, cursor, Math.Clamp(limit ?? 100, 1, 500), ct));
+            return Json(await TranscriptQueries.PageAsync(db, channel, window, q, language, cursor, Math.Clamp(limit ?? 100, 1, 500), ct, segments ?? true));
         });
 
         // What was being said at a given moment (e.g. the CreatedAt of a chat message), +/- tolerance seconds.
-        g.MapGet("/channels/{slug}/transcripts/at", async (string slug, DateTime at, double? tolerance,
+        g.MapGet("/channels/{slug}/transcripts/at", async (string slug, DateTime at, double? tolerance, bool? segments,
             ClaimsPrincipal user, KickGatewayDbContext db, CancellationToken ct) =>
         {
             var scope = await AnalyticsScope.ForUserAsync(user, db, ct);
             var channel = Slug(slug);
             if (!scope.Allows(channel)) return ChannelNotFound(channel);
             var utc = at.Kind == DateTimeKind.Utc ? at : at.ToUniversalTime();
-            return Json(await TranscriptQueries.AroundAsync(db, channel, utc, Math.Clamp(tolerance ?? 20, 0, 300), ct));
+            return Json(await TranscriptQueries.AroundAsync(db, channel, utc, Math.Clamp(tolerance ?? 20, 0, 300), ct, segments ?? true));
+        });
+
+        // One chronology of the channel: speech slices (LiveTranscripts), chatter events and chat messages merged by
+        // stream time, oldest first, keyset-paged. Window = from/to, or 'at' with before/after seconds around a moment;
+        // default = the last hour. Three bounded index seeks per page (see TimelineQueries) - never a join or a scan.
+        g.MapGet("/channels/{slug}/timeline", async (string slug, string? from, string? to, string? at, double? before, double? after,
+            string? include, float? minConfidence, string? cursor, int? limit,
+            ClaimsPrincipal user, KickGatewayDbContext db, CancellationToken ct) =>
+        {
+            if (!TimelineKinds.TryParseInclude(include, out var kinds, out var err)) return Bad(err);
+
+            var now = DateTime.UtcNow;
+            AnalyticsWindow window;
+            if (!string.IsNullOrWhiteSpace(at))
+            {
+                if (!AnalyticsTime.TryParse(at, now, out var moment) || moment is null)
+                    return Bad($"invalid 'at': {at} (use ISO-8601 like 2026-09-01T18:00:00Z or a look-back like 15m)");
+                window = new AnalyticsWindow(moment.Value.AddSeconds(-Math.Clamp(before ?? 60, 0, 3600)), moment.Value.AddSeconds(Math.Clamp(after ?? 180, 0, 3600)));
+            }
+            else
+            {
+                if (!AnalyticsTime.TryResolveWindow(from, to, null, now, out window, out err)) return Bad(err);
+                if (window.From is null && !string.Equals(from?.Trim(), "all", StringComparison.OrdinalIgnoreCase))
+                    window = window with { From = window.To - TimelineQueries.DefaultLookBack };
+            }
+
+            var scope = await AnalyticsScope.ForUserAsync(user, db, ct);
+            var channel = Slug(slug);
+            if (!scope.Allows(channel)) return ChannelNotFound(channel);
+            return Json(await TimelineQueries.PageAsync(db, channel, window, kinds, Math.Clamp(minConfidence ?? 0, 0, 1), cursor,
+                Math.Clamp(limit ?? TimelineQueries.DefaultLimit, 1, TimelineQueries.MaxLimit), ct));
         });
 
         return routes;
