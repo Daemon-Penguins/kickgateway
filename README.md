@@ -86,8 +86,10 @@ docs/CHAT-ANALYTICS.md                        # Chatter profiles + interaction g
   + `ReceivedRealtimeEvents.RawData`) into a queryable read model (`ChatMessages`,
   `ChatMentions`, `ChatterEvents`) and serves read-only chatter profiles, pair
   dynamics and a who-talks-to-whom graph under `/api/analytics/*` (admin cookie or
-  `Analytics:ApiKey`). `TailoredApps.KickGateway.Mcp` exposes those as MCP tools
-  for Claude & co. It is deployed as the `mcp` container at `https://${PUBLIC_HOST}/mcp`
+  `Analytics:ApiKey`); with the transcriber running it also serves the stored speech
+  (`/transcripts`) and a channel timeline that merges what the stream said, what happened
+  and what chat wrote by stream time (`/timeline`). `TailoredApps.KickGateway.Mcp` exposes
+  those as MCP tools for Claude & co. It is deployed as the `mcp` container at `https://${PUBLIC_HOST}/mcp`
   (Bearer = the analytics key) and can also run locally over stdio. See
   `docs/CHAT-ANALYTICS.md`.
 
