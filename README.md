@@ -90,7 +90,8 @@ docs/CHAT-ANALYTICS.md                        # Chatter profiles + interaction g
   (`/transcripts`) and a channel timeline that merges what the stream said, what happened
   and what chat wrote by stream time (`/timeline`). `TailoredApps.KickGateway.Mcp` exposes
   those as MCP tools for Claude & co. It is deployed as the `mcp` container at `https://${PUBLIC_HOST}/mcp`
-  (Bearer = the analytics key) and can also run locally over stdio. See
+  (Bearer = the analytics key, or OAuth 2.1 with PKCE for ChatGPT / Claude.ai — the container embeds the
+  authorization server and its consent page takes that same key) and can also run locally over stdio. See
   `docs/CHAT-ANALYTICS.md`.
 
 ## Quick start
@@ -255,7 +256,7 @@ push) returns to the pipeline-managed version.
 | `RABBITMQ_HOST` / `RABBITMQ_PORT` / `RABBITMQ_VHOST` / `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | broker (private vhost recommended) |
 | `SEED_SUPERADMIN_USERNAME` | Kick handle (lowercase) of the first super-admin. Used only on first deploy; ignored thereafter. |
 | `CLIPS_FETCHER_SECRET` | Shared secret between the API and the clips-fetcher sidecar (any random string). |
-| `ANALYTICS_API_KEY` | Optional. Enables API-key access to `/api/analytics/*` and is the key for the `mcp` container at `/mcp`. Random, ≥ 24 chars. Empty = admin cookie only, and `/mcp` rejects everything. |
+| `ANALYTICS_API_KEY` | Optional. Enables API-key access to `/api/analytics/*` and is the key for the `mcp` container at `/mcp` (as Bearer, or pasted on its OAuth consent page). Random, ≥ 24 chars. Empty = admin cookie only, and `/mcp` rejects everything. |
 
 ### Pre-deploy operator checklist
 

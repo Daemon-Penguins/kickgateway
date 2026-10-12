@@ -1,0 +1,77 @@
+using System.Net.Http.Headers;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Microsoft.Extensions.Caching.Memory;
+
+namespace TailoredApps.KickGateway.Mcp.OAuth;
+
+/// <summary>Resolves a Client ID Metadata Document (an https client id) into a client. Null = unknown/invalid.</summary>
+public interface IClientMetadataDocuments
+{
+    Task<OAuthClient?> GetAsync(string clientId, CancellationToken ct);
+}
+
+/// <summary>
+/// Fetches the document over HTTPS (no redirects, 5 s, 64 KB cap) and caches the verdict — an hour for a valid
+/// document, a minute for a failure — so a client id is fetched once per authorization, not once per token request.
+/// </summary>
+public sealed class HttpClientMetadataDocuments(
+    IHttpClientFactory httpClientFactory,
+    IMemoryCache cache,
+    ILogger<HttpClientMetadataDocuments> log) : IClientMetadataDocuments
+{
+    public const string HttpClientName = "client-metadata-documents";
+    private const int MaxBytes = 64 * 1024;
+    private static readonly TimeSpan ValidTtl = TimeSpan.FromHours(1);
+    private static readonly TimeSpan InvalidTtl = TimeSpan.FromMinutes(1);
+
+    private sealed record Entry(OAuthClient? Client);
+
+    public async Task<OAuthClient?> GetAsync(string clientId, CancellationToken ct)
+    {
+        if (!OAuthClient.IsMetadataDocumentUrl(clientId, out var uri)) return null;
+
+        var cacheKey = "cimd:" + clientId;
+        if (cache.TryGetValue(cacheKey, out Entry? cached) && cached is not null) return cached.Client;
+
+        var client = await FetchAsync(clientId, uri, ct);
+        cache.Set(cacheKey, new Entry(client), client is null ? InvalidTtl : ValidTtl);
+        return client;
+    }
+
+    private async Task<OAuthClient?> FetchAsync(string clientId, Uri uri, CancellationToken ct)
+    {
+        try
+        {
+            using var http = httpClientFactory.CreateClient(HttpClientName);
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!response.IsSuccessStatusCode || (response.Content.Headers.ContentLength ?? 0) > MaxBytes)
+            {
+                log.LogWarning("Client metadata document {Url} rejected: HTTP {Status}, {Length} bytes", clientId, (int)response.StatusCode, response.Content.Headers.ContentLength);
+                return null;
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(ct);
+            var buffer = new byte[MaxBytes + 1];
+            int total = 0, read;
+            while (total < buffer.Length && (read = await stream.ReadAsync(buffer.AsMemory(total), ct)) > 0) total += read;
+            if (total > MaxBytes)
+            {
+                log.LogWarning("Client metadata document {Url} rejected: larger than {Max} bytes", clientId, MaxBytes);
+                return null;
+            }
+
+            var document = JsonNode.Parse(buffer.AsSpan(0, total)) as JsonObject;
+            var client = OAuthClient.FromMetadataDocument(clientId, document, out var problem);
+            if (client is null) log.LogWarning("Client metadata document {Url} rejected: {Problem}", clientId, problem);
+            return client;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or IOException)
+        {
+            log.LogWarning("Client metadata document {Url} could not be fetched: {Error}", clientId, ex.Message);
+            return null;
+        }
+    }
+}

@@ -251,7 +251,10 @@ jobs:
                 - db-internal
 
             # Chat-analytics MCP server (Streamable HTTP) at https://${PUBLIC_HOST}/mcp. A thin adapter: it calls
-            # the api over the internal network with the analytics key, and clients authenticate with the same key.
+            # the api over the internal network with the analytics key. Clients authenticate with the same key
+            # (Bearer / X-Api-Key) or via OAuth 2.1 — the container embeds the authorization server, whose consent
+            # page asks for that key. OAuth discovery lives at the host root (/.well-known/oauth-*), so the router
+            # must claim those paths too; Mcp__PublicBaseUrl pins the issuer/resource URLs.
             mcp:
               image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-mcp:${IMAGE_TAG:-latest}
               restart: unless-stopped
@@ -260,6 +263,7 @@ jobs:
               environment:
                 - ASPNETCORE_ENVIRONMENT=Production
                 - Mcp__Transport=http
+                - Mcp__PublicBaseUrl=https://${PUBLIC_HOST}
                 - KickGateway__BaseUrl=http://api:8080
                 - KickGateway__ApiKey=${ANALYTICS_API_KEY:-}
               networks:
@@ -267,7 +271,7 @@ jobs:
                 - traefik-public
               labels:
                 - "traefik.enable=true"
-                - "traefik.http.routers.kickgateway-mcp.rule=Host(`${PUBLIC_HOST}`) && PathPrefix(`/mcp`)"
+                - "traefik.http.routers.kickgateway-mcp.rule=Host(`${PUBLIC_HOST}`) && (PathPrefix(`/mcp`) || PathPrefix(`/.well-known/oauth-protected-resource`) || PathPrefix(`/.well-known/oauth-authorization-server`) || PathPrefix(`/.well-known/openid-configuration`))"
                 - "traefik.http.routers.kickgateway-mcp.priority=100"
                 - "traefik.http.routers.kickgateway-mcp.entrypoints=websecure"
                 - "traefik.http.routers.kickgateway-mcp.tls=true"
@@ -525,6 +529,26 @@ jobs:
           if [ "$OBS" = "500" ] || [ "$OBS" = "502" ] || [ "$OBS" = "503" ] || [ "$OBS" = "504" ]; then
             echo "❌ OBS clips endpoint returning 5xx"
             $SSH_CMD "cd /opt/apps/kickgateway && docker compose logs --tail 30 api clips-fetcher"
+            exit 1
+          fi
+
+          echo "── MCP server (OAuth discovery must reach the mcp container; /mcp must challenge, not 5xx) ──"
+          PRM=$(curl -ks -o /dev/null -w "%{http_code}" "https://${PUBLIC_HOST}/.well-known/oauth-protected-resource")
+          echo "GET /.well-known/oauth-protected-resource -> HTTP $PRM"
+          if [ "$PRM" != "200" ]; then
+            # 404 = OAuth inactive (no ANALYTICS_API_KEY) or the Traefik rule does not route the well-known paths.
+            echo "⚠️ OAuth resource metadata not served — OAuth clients (ChatGPT, Claude.ai) cannot connect"
+            if [ "$PRM" = "500" ] || [ "$PRM" = "502" ] || [ "$PRM" = "503" ] || [ "$PRM" = "504" ]; then
+              echo "❌ mcp container returning 5xx"
+              $SSH_CMD "cd /opt/apps/kickgateway && docker compose logs --tail 30 mcp"
+              exit 1
+            fi
+          fi
+          MCP=$(curl -ks -o /dev/null -w "%{http_code}" -X POST "https://${PUBLIC_HOST}/mcp" -H "Content-Type: application/json" -d '{}')
+          echo "POST /mcp (no auth) -> HTTP $MCP"
+          if [ "$MCP" != "401" ]; then
+            echo "❌ /mcp did not answer 401 to an unauthenticated request"
+            $SSH_CMD "cd /opt/apps/kickgateway && docker compose logs --tail 30 mcp"
             exit 1
           fi
 
