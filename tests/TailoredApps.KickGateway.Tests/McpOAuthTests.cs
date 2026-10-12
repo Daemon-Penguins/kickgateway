@@ -592,7 +592,10 @@ public class McpOAuthTests
             Assert.Contains("localhost", html);
             Assert.Contains("name=\"api_key\"", html);
             Assert.Equal("no-store", page.Headers.CacheControl?.ToString());
-            Assert.Contains("frame-ancestors 'none'", page.Headers.GetValues("Content-Security-Policy").Single());
+            var csp = page.Headers.GetValues("Content-Security-Policy").Single();
+            Assert.Contains("frame-ancestors 'none'", csp);
+            // Chrome enforces form-action on the post-submit redirect: the client's redirect origin must be allowed
+            Assert.Contains("form-action 'self' http://localhost:6274;", csp);
 
             using var unknownClientPage = await http.GetAsync(OAuthEndpoints.AuthorizePath + "?client_id=nope&redirect_uri=https%3A%2F%2Fevil.example%2Fcb&response_type=code");
             Assert.Equal(HttpStatusCode.BadRequest, unknownClientPage.StatusCode); // no redirect to an untrusted URI
