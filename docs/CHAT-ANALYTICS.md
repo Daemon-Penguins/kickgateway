@@ -97,9 +97,9 @@ without `from` means "since the beginning".
 
 | Endpoint | Default window | Returns |
 | --- | --- | --- |
-| `/api/analytics/status` | – | Projection lag per source, row counts, oldest/newest message, channels in scope |
+| `/api/analytics/status` | – | Projection lag per source, row counts, oldest/newest message, channels in scope, `transcripts` = speech-to-text coverage per channel (below) |
 | `/api/analytics/channels` | 30 d | Channels with chat: messages, chatters, first/last |
-| `/api/analytics/channels/{slug}/overview` | 7 d | Messages, chatters, new vs returning, reply/mention share, per-hour + per-day activity, top 15 chatters, event totals |
+| `/api/analytics/channels/{slug}/overview` | 7 d | Messages, chatters, new vs returning, reply/mention share, per-hour + per-day activity, top 15 chatters, event totals, `transcripts` (speech in the window, when any) |
 | `/api/analytics/channels/{slug}/chatters?sort=&limit=&offset=` | 7 d | Paged chatters; `sort` = `messages` / `active_days` / `replies` / `last_seen` / `first_seen` |
 | `/api/analytics/channels/{slug}/interactions?maxNodes=&maxEdges=&proximity=&replyWeight=&mentionWeight=&giftWeight=&proximityWeight=` | 7 d | Interaction graph (below) |
 | `/api/analytics/chatters?q=&channel=&limit=` | all | Find chatters by username fragment or id |
@@ -166,7 +166,14 @@ message is a gap, and there is nothing to rebuild from.
 |---|---|
 | `GET /channels/{slug}/transcripts?from&to&q&language&cursor&limit&segments` | slices overlapping the window, oldest first; `q` = substring match on the text; `language` = ISO-639-1 filter (e.g. `de`); keyset `cursor` (max `limit` 500); `segments=false` = text only (no per-segment timings) |
 | `GET /channels/{slug}/transcripts/at?at=<ISO-8601>&tolerance=20&segments` | what was being said at that moment (+/- tolerance seconds), e.g. pass a chat message's `createdAt` |
+| `GET /channels/{slug}/transcripts/{id}/reactions?lagMin=5&lagMax=45&limit=100` | what chat wrote right after one slice: the slice with its `previous`/`next`, the messages in `[endedAt+lagMin, endedAt+lagMax)` oldest first (each with `secondsAfterEnd`), and `stats` — messages, chatters, per minute vs the 60 s before the slice started (`baseline…`, `ratio`), `firstReply`. `stats` count the whole window even when `limit` truncates the list |
 | `GET /channels/{slug}/timeline?from&to&at&before&after&include&minConfidence&cursor&limit` | speech + events + chat of the channel in one chronology (below) |
+
+Coverage, so a model knows whether speech exists before it concludes "the streamer never said
+that": `/status` carries `transcripts` with, per channel in scope, the slice count, first/last
+slice, when the newest one was stored (`lastReceiveLagSeconds` = pipeline delay) and the last 24 h
+in detail (slices, `speechSeconds`, `averageConfidence`, slices per `language`); `/overview` carries
+the same `transcripts` block for its window (slices that start in it), omitted when there are none.
 
 Each item carries `startedAt`/`endedAt` (estimated UTC stream time, +/- one HLS segment),
 `audioStartSeconds` (the transcriber's per-channel audio clock, for ordering/gap detection), the
@@ -219,8 +226,9 @@ is exact. Like every analytics query it runs READ UNCOMMITTED and never touches 
 `analytics_status`, `list_channels`, `channel_overview`, `list_chatters`,
 `interaction_graph`, `find_chatters`, `chatter_profile`,
 `chatter_relationship`, `search_messages`, `message_context`, and for channels
-with live transcripts `search_transcripts`, `transcript_at` and
-`stream_timeline` (speech + events + chat in one chronology). The transcript
+with live transcripts `search_transcripts`, `transcript_at`, `speech_reactions`
+(the chat that followed one sentence, with its rate against the minute before)
+and `stream_timeline` (speech + events + chat in one chronology). The transcript
 tools default to `segments=false` (text only) to keep responses small.
 
 ### Remote: the deployed `mcp` container (no local install)

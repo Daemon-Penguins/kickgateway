@@ -168,6 +168,24 @@ public static class AnalyticsEndpoints
             return Json(await TranscriptQueries.AroundAsync(db, channel, utc, Math.Clamp(tolerance ?? 20, 0, 300), ct, segments ?? true));
         });
 
+        // What chat wrote right after one speech slice: the slice with its neighbours, the messages in
+        // [endedAt + lagMin, endedAt + lagMax) and their rate against the minute before the slice. Bounded seeks only.
+        g.MapGet("/channels/{slug}/transcripts/{id:long}/reactions", async (string slug, long id, double? lagMin, double? lagMax, int? limit,
+            ClaimsPrincipal user, KickGatewayDbContext db, CancellationToken ct) =>
+        {
+            var min = Math.Clamp(lagMin ?? SpeechReactionQueries.DefaultLagMin, 0, SpeechReactionQueries.MaxLag);
+            var max = Math.Clamp(lagMax ?? SpeechReactionQueries.DefaultLagMax, 0, SpeechReactionQueries.MaxLag);
+            if (max <= min) return Bad($"lagMax ({max}) must be greater than lagMin ({min})");
+            var scope = await AnalyticsScope.ForUserAsync(user, db, ct);
+            var channel = Slug(slug);
+            if (!scope.Allows(channel)) return ChannelNotFound(channel);
+            var reactions = await SpeechReactionQueries.ForSliceAsync(db, channel, id, min, max,
+                Math.Clamp(limit ?? SpeechReactionQueries.DefaultLimit, 1, SpeechReactionQueries.MaxLimit), ct);
+            return reactions is null
+                ? Results.NotFound(new { error = $"transcript slice {id} not found on channel '{channel}'" })
+                : Json(reactions);
+        });
+
         // One chronology of the channel: speech slices (LiveTranscripts), chatter events and chat messages merged by
         // stream time, oldest first, keyset-paged. Window = from/to, or 'at' with before/after seconds around a moment;
         // default = the last hour. Three bounded index seeks per page (see TimelineQueries) - never a join or a scan.

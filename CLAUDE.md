@@ -229,7 +229,10 @@ Status: actively developed.
   channel timeline (`/channels/{slug}/timeline`, `TimelineQueries`) merges speech (`LiveTranscripts`,
   keyed on `StartedAt` - never `ReceivedAt`, which is the slice's end + inference), `ChatterEvents`
   and `ChatMessages` by stream time with a `(at, kind rank, id)` keyset cursor: at most three
-  bounded index seeks per page, merged in memory - never a join or a scan over the chat tables. The
+  bounded index seeks per page, merged in memory - never a join or a scan over the chat tables.
+  `/transcripts/{id}/reactions` (`SpeechReactionQueries`: one slice, its neighbours, the chat in
+  `[endedAt+lagMin, endedAt+lagMax)` vs the minute before) and the transcript coverage in `/status` +
+  `/overview` (`TranscriptCoverageQueries`) follow the same rule: bounded seeks, aggregates in SQL. The
   MCP server (`TailoredApps.KickGateway.Mcp`) is a dumb adapter over that REST API — no
   DB access, no analysis of its own — running either locally over stdio or deployed as the
   `mcp` container (Streamable HTTP; Traefik routes `https://<host>/mcp` to it, it calls the

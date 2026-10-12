@@ -17,7 +17,9 @@ public sealed class ChatAnalyticsTools(GatewayClient gateway)
 
     [McpServerTool(Name = "analytics_status", Title = "Analytics status", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("How fresh and how big the chat dataset is: projection lag per source (webhooks, realtime), message/event counts, " +
-                 "oldest/newest message and the channels you may query. Call first when results look empty or stale.")]
+                 "oldest/newest message, the channels you may query, and 'transcripts' = speech-to-text coverage per channel (slices, " +
+                 "first/last slice, pipeline delay, last 24 h with speech seconds and languages). Call first when results look empty " +
+                 "or stale, and before concluding a streamer 'never said' something - no coverage means no speech data, not silence.")]
     public Task<string> Status(CancellationToken ct) =>
         gateway.GetAsync("/api/analytics/status", null, ct);
 
@@ -31,7 +33,8 @@ public sealed class ChatAnalyticsTools(GatewayClient gateway)
 
     [McpServerTool(Name = "channel_overview", Title = "Channel overview", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("Community snapshot of one channel: messages, chatters, new vs returning chatters, share of replies/@mentions, " +
-                 "messages per UTC hour and per day, top 15 chatters, and follow/sub/gift/kicks/ban/timeout/deletion totals. Default window: last 7 days.")]
+                 "messages per UTC hour and per day, top 15 chatters, follow/sub/gift/kicks/ban/timeout/deletion totals, and " +
+                 "'transcripts' (slices, speech seconds, languages, average confidence) when the window has speech-to-text. Default window: last 7 days.")]
     public Task<string> ChannelOverview(
         [Description(ChannelDoc)] string channel,
         [Description(FromDoc)] string? from = null,
@@ -168,6 +171,22 @@ public sealed class ChatAnalyticsTools(GatewayClient gateway)
         CancellationToken ct = default) =>
         gateway.GetAsync($"/api/analytics/channels/{Seg(channel)}/transcripts/at",
             Q(("at", at), ("tolerance", toleranceSeconds), ("segments", includeSegments == true)), ct);
+
+    [McpServerTool(Name = "speech_reactions", Title = "How chat reacted to one sentence", ReadOnly = true, Idempotent = true, OpenWorld = false)]
+    [Description("What chat wrote right after ONE transcript slice (its 'id' from search_transcripts, transcript_at or a speech item of " +
+                 "stream_timeline): the slice with its previous and next slices, the messages in [endedAt + lagMin, endedAt + lagMax) " +
+                 "oldest first, and 'stats' - messages, distinct chatters, messages per minute against the minute BEFORE the slice " +
+                 "started ('ratio' > 1 = chat sped up; null = that minute was silent) and who replied first. Default lag 5-45 s, " +
+                 "which covers the 10-20 s viewer delay. The reverse direction (what was said before a message) is transcript_at. " + SpeechDoc)]
+    public Task<string> SpeechReactions(
+        [Description(ChannelDoc)] string channel,
+        [Description("Transcript slice id (the 'id' of a speech item).")] long sliceId,
+        [Description("Window start, seconds after the slice's endedAt, 0-600 (default 5).")] double? lagMinSeconds = null,
+        [Description("Window end, seconds after the slice's endedAt, 0-600 (default 45).")] double? lagMaxSeconds = null,
+        [Description("Max messages to return, 1-500 (default 100); 'stats' always count the whole window.")] int? limit = null,
+        CancellationToken ct = default) =>
+        gateway.GetAsync($"/api/analytics/channels/{Seg(channel)}/transcripts/{sliceId}/reactions",
+            Q(("lagMin", lagMinSeconds), ("lagMax", lagMaxSeconds), ("limit", limit ?? 100)), ct);
 
     [McpServerTool(Name = "stream_timeline", Title = "Channel timeline: speech + chat + events", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("One chronology of a channel, oldest first: what the stream SAID (kind 'speech'), what HAPPENED (kind 'event': " +
