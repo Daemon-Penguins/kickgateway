@@ -87,7 +87,7 @@ public static class OAuthEndpoints
         {
             AuthorizeOutcome.Rejected r => ErrorPage(ctx, r.Error),
             AuthorizeOutcome.RedirectWithError e => RedirectError(e.RedirectUri, e.Error, e.State, urls),
-            AuthorizeOutcome.Valid v => ConsentPage(ctx, v.Client, request, error: null, StatusCodes.Status200OK),
+            AuthorizeOutcome.Valid v => ConsentPage(ctx, v.Client, request, v.RedirectUri, error: null, StatusCodes.Status200OK),
             var other => throw new InvalidOperationException(other.GetType().Name),
         };
     }
@@ -112,7 +112,7 @@ public static class OAuthEndpoints
                 if (!oauth.CheckUserCredential(form["api_key"]))
                 {
                     await Task.Delay(WrongKeyDelay, ct);
-                    return ConsentPage(ctx, v.Client, request, "That key was not accepted. Paste the gateway's analytics API key (ANALYTICS_API_KEY).", StatusCodes.Status401Unauthorized);
+                    return ConsentPage(ctx, v.Client, request, v.RedirectUri, "That key was not accepted. Paste the gateway's analytics API key (ANALYTICS_API_KEY).", StatusCodes.Status401Unauthorized);
                 }
                 var code = oauth.IssueCode(v, urls);
                 return Results.Redirect(QueryHelpers.AddQueryString(v.RedirectUri, new Dictionary<string, string?>
@@ -154,9 +154,12 @@ public static class OAuthEndpoints
 
     // ── Rendering ─────────────────────────────────────────────────────────────────────────────────────────────
 
-    private static IResult ConsentPage(HttpContext ctx, OAuthClient client, AuthorizeRequest request, string? error, int status)
+    private static IResult ConsentPage(HttpContext ctx, OAuthClient client, AuthorizeRequest request, string redirectUri, string? error, int status)
     {
-        PageHeaders(ctx);
+        // Chrome applies CSP form-action to the redirect that follows a form submission (Firefox does not), so the
+        // 302 back to the client must be allowed explicitly or the browser silently stays on this page - that is
+        // exactly what ChatGPT users saw: the right key did "nothing", only a wrong key showed an error.
+        PageHeaders(ctx, formAction: "'self' " + new Uri(redirectUri).GetLeftPart(UriPartial.Authority));
         var hidden = new StringBuilder();
         foreach (var (name, value) in new (string, string?)[]
                  {
@@ -214,7 +217,7 @@ public static class OAuthEndpoints
 
     private static IResult ErrorPage(HttpContext ctx, OAuthError error)
     {
-        PageHeaders(ctx);
+        PageHeaders(ctx, formAction: "'none'");
         var html = $$"""
             <!doctype html>
             <html lang="en"><head><meta charset="utf-8"><title>Authorization error</title>
@@ -269,10 +272,10 @@ public static class OAuthEndpoints
         ctx.Response.Headers.Pragma = "no-cache";
     }
 
-    private static void PageHeaders(HttpContext ctx)
+    private static void PageHeaders(HttpContext ctx, string formAction)
     {
         NoStore(ctx);
-        ctx.Response.Headers.ContentSecurityPolicy = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'";
+        ctx.Response.Headers.ContentSecurityPolicy = $"default-src 'none'; style-src 'unsafe-inline'; form-action {formAction}; base-uri 'none'; frame-ancestors 'none'";
         ctx.Response.Headers["Referrer-Policy"] = "no-referrer";
         ctx.Response.Headers.XFrameOptions = "DENY";
     }
