@@ -5,15 +5,19 @@ using Microsoft.Extensions.Caching.Memory;
 
 namespace TailoredApps.KickGateway.Mcp.OAuth;
 
-/// <summary>Resolves a Client ID Metadata Document (an https client id) into a client. Null = unknown/invalid.</summary>
+/// <summary>What the authorization server fetches on a client's behalf: its metadata document and its JWK Set.</summary>
 public interface IClientMetadataDocuments
 {
+    /// <summary>Resolves a Client ID Metadata Document (an https client id) into a client. Null = unknown/invalid.</summary>
     Task<OAuthClient?> GetAsync(string clientId, CancellationToken ct);
+
+    /// <summary>The client's JWK Set for <c>private_key_jwt</c>. <paramref name="refresh"/> bypasses the cache (unknown kid = key rotation).</summary>
+    Task<JsonObject?> GetJwksAsync(string jwksUri, bool refresh, CancellationToken ct);
 }
 
 /// <summary>
-/// Fetches the document over HTTPS (no redirects, 5 s, 64 KB cap) and caches the verdict — an hour for a valid
-/// document, a minute for a failure — so a client id is fetched once per authorization, not once per token request.
+/// Fetches over HTTPS (no redirects, 5 s, 64 KB cap) and caches the verdict — an hour for a valid document, a
+/// minute for a failure — so a client id is fetched once per authorization, not once per token request.
 /// </summary>
 public sealed class HttpClientMetadataDocuments(
     IHttpClientFactory httpClientFactory,
@@ -25,21 +29,47 @@ public sealed class HttpClientMetadataDocuments(
     private static readonly TimeSpan ValidTtl = TimeSpan.FromHours(1);
     private static readonly TimeSpan InvalidTtl = TimeSpan.FromMinutes(1);
 
-    private sealed record Entry(OAuthClient? Client);
+    private sealed record ClientEntry(OAuthClient? Client);
+
+    private sealed record JwksEntry(JsonObject? Jwks);
 
     public async Task<OAuthClient?> GetAsync(string clientId, CancellationToken ct)
     {
         if (!OAuthClient.IsMetadataDocumentUrl(clientId, out var uri)) return null;
 
         var cacheKey = "cimd:" + clientId;
-        if (cache.TryGetValue(cacheKey, out Entry? cached) && cached is not null) return cached.Client;
+        if (cache.TryGetValue(cacheKey, out ClientEntry? cached) && cached is not null) return cached.Client;
 
-        var client = await FetchAsync(clientId, uri, ct);
-        cache.Set(cacheKey, new Entry(client), client is null ? InvalidTtl : ValidTtl);
+        OAuthClient? client = null;
+        var document = await FetchJsonAsync(uri, ct);
+        if (document is not null)
+        {
+            client = OAuthClient.FromMetadataDocument(clientId, document, out var problem);
+            if (client is null) log.LogWarning("Client metadata document {Url} rejected: {Problem}", clientId, problem);
+        }
+        cache.Set(cacheKey, new ClientEntry(client), client is null ? InvalidTtl : ValidTtl);
         return client;
     }
 
-    private async Task<OAuthClient?> FetchAsync(string clientId, Uri uri, CancellationToken ct)
+    public async Task<JsonObject?> GetJwksAsync(string jwksUri, bool refresh, CancellationToken ct)
+    {
+        if (!OAuthClient.IsFetchableHttpsUrl(jwksUri, out var uri)) return null;
+
+        var cacheKey = "jwks:" + jwksUri;
+        if (refresh) cache.Remove(cacheKey);
+        else if (cache.TryGetValue(cacheKey, out JwksEntry? cached) && cached is not null) return cached.Jwks;
+
+        var jwks = await FetchJsonAsync(uri, ct);
+        if (jwks is not null && jwks["keys"] is not JsonArray)
+        {
+            log.LogWarning("JWKS {Url} rejected: no 'keys' array", jwksUri);
+            jwks = null;
+        }
+        cache.Set(cacheKey, new JwksEntry(jwks), jwks is null ? InvalidTtl : ValidTtl);
+        return jwks;
+    }
+
+    private async Task<JsonObject?> FetchJsonAsync(Uri uri, CancellationToken ct)
     {
         try
         {
@@ -49,7 +79,7 @@ public sealed class HttpClientMetadataDocuments(
             using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
             if (!response.IsSuccessStatusCode || (response.Content.Headers.ContentLength ?? 0) > MaxBytes)
             {
-                log.LogWarning("Client metadata document {Url} rejected: HTTP {Status}, {Length} bytes", clientId, (int)response.StatusCode, response.Content.Headers.ContentLength);
+                log.LogWarning("{Url} rejected: HTTP {Status}, {Length} bytes", uri, (int)response.StatusCode, response.Content.Headers.ContentLength);
                 return null;
             }
 
@@ -59,18 +89,17 @@ public sealed class HttpClientMetadataDocuments(
             while (total < buffer.Length && (read = await stream.ReadAsync(buffer.AsMemory(total), ct)) > 0) total += read;
             if (total > MaxBytes)
             {
-                log.LogWarning("Client metadata document {Url} rejected: larger than {Max} bytes", clientId, MaxBytes);
+                log.LogWarning("{Url} rejected: larger than {Max} bytes", uri, MaxBytes);
                 return null;
             }
 
-            var document = JsonNode.Parse(buffer.AsSpan(0, total)) as JsonObject;
-            var client = OAuthClient.FromMetadataDocument(clientId, document, out var problem);
-            if (client is null) log.LogWarning("Client metadata document {Url} rejected: {Problem}", clientId, problem);
-            return client;
+            if (JsonNode.Parse(buffer.AsSpan(0, total)) is JsonObject document) return document;
+            log.LogWarning("{Url} rejected: not a JSON object", uri);
+            return null;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException or IOException)
         {
-            log.LogWarning("Client metadata document {Url} could not be fetched: {Error}", clientId, ex.Message);
+            log.LogWarning("{Url} could not be fetched: {Error}", uri, ex.Message);
             return null;
         }
     }

@@ -147,7 +147,8 @@ public static class OAuthEndpoints
 
         var result = await oauth.TokenAsync(new TokenRequest(
             Value(form["grant_type"]), clientId, clientSecret, Value(form["code"]), Value(form["code_verifier"]),
-            Value(form["redirect_uri"]), Value(form["refresh_token"]), Value(form["resource"])), Urls(ctx, o), ct);
+            Value(form["redirect_uri"]), Value(form["refresh_token"]), Value(form["resource"]),
+            Value(form["client_assertion_type"]), Value(form["client_assertion"])), Urls(ctx, o), ct);
         return result.Error is { } e ? TokenError(ctx, e) : Results.Json(result.Value);
     }
 

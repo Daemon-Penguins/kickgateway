@@ -35,7 +35,8 @@ public sealed record AuthorizeRequest(
 
 public sealed record TokenRequest(
     string? GrantType, string? ClientId, string? ClientSecret, string? Code, string? CodeVerifier,
-    string? RedirectUri, string? RefreshToken, string? Resource);
+    string? RedirectUri, string? RefreshToken, string? Resource,
+    string? ClientAssertionType = null, string? ClientAssertion = null);
 
 /// <summary>The URLs of this deployment, built from the public origin (configured, or derived per request).</summary>
 public sealed record OAuthUrls(string Issuer)
@@ -67,16 +68,19 @@ public sealed record OAuthUrls(string Issuer)
 /// <summary>
 /// The embedded OAuth 2.1 authorization server + the resource-server side of token validation, in one place because
 /// they share the signing key. Stateless by design: clients, codes and tokens are HMAC-signed claims (see
-/// <see cref="JwsSigner"/>); the only in-memory state is a best-effort "already used" set for codes and rotated
-/// refresh tokens. Revoking everything = rotate the API key (the default signing secret derives from it).
+/// <see cref="JwsSigner"/>); the only in-memory state is a best-effort "already used" set for codes, rotated refresh
+/// tokens and client-assertion ids. Revoking everything = rotate the API key (the default signing secret derives from it).
 /// </summary>
 public sealed class OAuthServer
 {
     public const string Scope = "analytics";
+    public const string JwtBearerAssertionType = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
     private const string Subject = "analytics-key";
     private const string KeyInfo = "kickgateway-mcp-oauth-v1";
     private const int UsedPruneAt = 10_000;
     private const int UsedCap = 200_000;
+    private const int MinRsaBits = 2048;
+    private static readonly string[] AssertionAlgs = ["RS256", "PS256", "ES256"];
     private static readonly Regex PkceToken = new(@"^[A-Za-z0-9\-._~]{43,128}$", RegexOptions.Compiled);
 
     private readonly McpOAuthOptions _o;
@@ -132,7 +136,8 @@ public sealed class OAuthServer
             ["response_modes_supported"] = new JsonArray("query"),
             ["grant_types_supported"] = new JsonArray("authorization_code", "refresh_token"),
             ["code_challenge_methods_supported"] = new JsonArray("S256"),
-            ["token_endpoint_auth_methods_supported"] = new JsonArray(OAuthClient.AuthNone, OAuthClient.AuthSecretPost, OAuthClient.AuthSecretBasic),
+            ["token_endpoint_auth_methods_supported"] = new JsonArray(OAuthClient.AuthNone, OAuthClient.AuthSecretPost, OAuthClient.AuthSecretBasic, OAuthClient.AuthPrivateKeyJwt),
+            ["token_endpoint_auth_signing_alg_values_supported"] = new JsonArray(AssertionAlgs.Select(a => (JsonNode)a).ToArray()),
             ["scopes_supported"] = new JsonArray(Scope),
             ["client_id_metadata_document_supported"] = _o.AllowClientMetadataDocuments,
             ["authorization_response_iss_parameter_supported"] = true,
@@ -159,8 +164,8 @@ public sealed class OAuthServer
         }
 
         var method = OAuthClient.AsString(request["token_endpoint_auth_method"]) ?? OAuthClient.AuthSecretBasic; // RFC 7591 default
-        if (!OAuthClient.IsSupportedAuthMethod(method))
-            return OAuthResult.Fail("invalid_client_metadata", "token_endpoint_auth_method must be none, client_secret_post or client_secret_basic");
+        if (!OAuthClient.IsSupportedRegistrationAuthMethod(method))
+            return OAuthResult.Fail("invalid_client_metadata", "token_endpoint_auth_method must be none, client_secret_post or client_secret_basic (private_key_jwt needs a client id metadata document)");
 
         var name = OAuthClient.AsString(request["client_name"]) is { Length: > 0 } n ? n.Trim() : new Uri(redirectUris[0]).Host;
         name = OAuthClient.Truncate(name, OAuthClient.MaxNameLength);
@@ -213,13 +218,29 @@ public sealed class OAuthServer
             clientId,
             OAuthClient.AsString(p["name"]) ?? "client",
             redirectUris,
-            OAuthClient.AsString(p["tam"]) ?? OAuthClient.AuthSecretBasic,
+            [OAuthClient.AsString(p["tam"]) ?? OAuthClient.AuthSecretBasic],
+            JwksUri: null,
             IsMetadataDocument: false);
     }
 
     // ── Authorization endpoint ────────────────────────────────────────────────────────────────────────────────
 
     public async Task<AuthorizeOutcome> ValidateAuthorizeAsync(AuthorizeRequest r, OAuthUrls u, CancellationToken ct)
+    {
+        var outcome = await ValidateAuthorizeCoreAsync(r, u, ct);
+        switch (outcome)
+        {
+            case AuthorizeOutcome.Rejected x:
+                _log.LogWarning("Authorization request refused for client {Client}: {Error} ({Description})", Describe(r.ClientId), x.Error.Error, x.Error.Description);
+                break;
+            case AuthorizeOutcome.RedirectWithError x:
+                _log.LogInformation("Authorization request from client {Client} sent back with {Error} ({Description})", Describe(r.ClientId), x.Error.Error, x.Error.Description);
+                break;
+        }
+        return outcome;
+    }
+
+    private async Task<AuthorizeOutcome> ValidateAuthorizeCoreAsync(AuthorizeRequest r, OAuthUrls u, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(r.ClientId))
             return new AuthorizeOutcome.Rejected(new("invalid_request", "client_id is required"));
@@ -281,10 +302,47 @@ public sealed class OAuthServer
 
     public async Task<OAuthResult> TokenAsync(TokenRequest r, OAuthUrls u, CancellationToken ct)
     {
-        var client = await ResolveClientAsync(r.ClientId, ct);
+        var result = await TokenCoreAsync(r, u, ct);
+        var clientId = r.ClientId ?? (ParsedJwt.TryParse(r.ClientAssertion) is { } jwt ? OAuthClient.AsString(jwt.Payload["iss"]) : null);
+        if (result.Error is { } e)
+            _log.LogWarning("Token request refused: {Error} ({Description}) - grant {Grant}, client {Client}, auth {Auth}",
+                e.Error, e.Description, r.GrantType ?? "-", Describe(clientId), AuthStyle(r));
+        else
+            _log.LogInformation("Tokens issued: grant {Grant}, client {Client}, auth {Auth}", r.GrantType, Describe(clientId), AuthStyle(r));
+        return result;
+    }
+
+    private async Task<OAuthResult> TokenCoreAsync(TokenRequest r, OAuthUrls u, CancellationToken ct)
+    {
+        var clientId = r.ClientId;
+        ParsedJwt? assertion = null;
+        if (!string.IsNullOrEmpty(r.ClientAssertion) || !string.IsNullOrEmpty(r.ClientAssertionType))
+        {
+            if (r.ClientAssertionType != JwtBearerAssertionType)
+                return OAuthResult.Fail("invalid_client", "client_assertion_type must be " + JwtBearerAssertionType, 401);
+            assertion = ParsedJwt.TryParse(r.ClientAssertion);
+            if (assertion is null) return OAuthResult.Fail("invalid_client", "client_assertion is not a JWT", 401);
+            var issuer = OAuthClient.AsString(assertion.Payload["iss"]);
+            if (string.IsNullOrEmpty(issuer)) return OAuthResult.Fail("invalid_client", "client_assertion has no iss", 401);
+            if (clientId is not null && clientId != issuer)
+                return OAuthResult.Fail("invalid_client", "client_id does not match the client_assertion issuer", 401);
+            clientId ??= issuer; // RFC 7523: client_id is optional when the assertion identifies the client
+        }
+
+        var client = await ResolveClientAsync(clientId, ct);
         if (client is null) return OAuthResult.Fail("invalid_client", "unknown client_id", 401);
-        if (!client.IsPublic && !FixedEquals(r.ClientSecret ?? "", ClientSecretFor(client.Id)))
-            return OAuthResult.Fail("invalid_client", "client authentication failed", 401);
+
+        if (assertion is not null)
+        {
+            var problem = await VerifyAssertionAsync(client, assertion, u, ct);
+            if (problem is not null) return OAuthResult.Fail("invalid_client", "client_assertion rejected: " + problem, 401);
+        }
+        else if (!client.IsPublic)
+        {
+            if (!client.UsesSecret || !FixedEquals(r.ClientSecret ?? "", ClientSecretFor(client.Id)))
+                return OAuthResult.Fail("invalid_client", "client authentication failed", 401);
+        }
+
         if (r.Resource is not null && !ResourceMatches(r.Resource, u))
             return OAuthResult.Fail("invalid_target", $"resource must be {u.Resource}");
 
@@ -311,7 +369,6 @@ public sealed class OAuthServer
         if (!MarkUsed(p)) return OAuthResult.Fail("invalid_grant", "the code has already been used");
 
         var grantExpires = Now() + Math.Max(1, _o.RefreshTokenDays) * 86_400L;
-        _log.LogInformation("Issued tokens to OAuth client {Name}", client.Name);
         return OAuthResult.Ok(IssueTokens(u, ClientHash(client.Id), grantExpires));
     }
 
@@ -363,6 +420,98 @@ public sealed class OAuthServer
         };
     }
 
+    // ── private_key_jwt (RFC 7523) ────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Verifies a client assertion against the client's published JWKS: iss = sub = client id, aud = our token
+    /// endpoint (or issuer), unexpired, a single-use jti, and a signature by one of the client's keys (RS256, PS256 or
+    /// ES256). An unknown kid triggers one cache-bypassing refetch, which is how key rotation shows up.
+    /// </summary>
+    private async Task<string?> VerifyAssertionAsync(OAuthClient client, ParsedJwt jwt, OAuthUrls u, CancellationToken ct)
+    {
+        if (!client.Supports(OAuthClient.AuthPrivateKeyJwt) || client.JwksUri is null) return "the client is not registered for private_key_jwt";
+        if (jwt.Alg is null || !AssertionAlgs.Contains(jwt.Alg)) return "alg must be RS256, PS256 or ES256";
+        var p = jwt.Payload;
+        if (OAuthClient.AsString(p["iss"]) != client.Id || OAuthClient.AsString(p["sub"]) != client.Id) return "iss and sub must equal the client_id";
+        if (!AudienceContains(p["aud"], u.TokenEndpoint, u.Issuer)) return "aud must be the token endpoint or the issuer";
+        if (Long(p["exp"]) is not { } exp || exp <= Now()) return "expired";
+        var jti = OAuthClient.AsString(p["jti"]);
+        if (string.IsNullOrEmpty(jti)) return "jti is required";
+
+        var jwks = await _documents.GetJwksAsync(client.JwksUri, refresh: false, ct);
+        if (!VerifyWithJwks(jwks, jwt))
+        {
+            if (jwks is not null && jwt.Kid is not null && HasKid(jwks, jwt.Kid)) return "signature does not verify against the client's JWKS";
+            jwks = await _documents.GetJwksAsync(client.JwksUri, refresh: true, ct);
+            if (!VerifyWithJwks(jwks, jwt)) return jwks is null ? "the client's JWKS could not be fetched" : "no key in the client's JWKS verifies the signature";
+        }
+
+        if (!MarkUsed("assertion|" + ClientHash(client.Id) + "|" + jti, exp)) return "jti has already been used";
+        return null;
+    }
+
+    private static bool HasKid(JsonObject jwks, string kid) =>
+        jwks["keys"] is JsonArray keys && keys.Any(k => k is JsonObject key && OAuthClient.AsString(key["kid"]) == kid);
+
+    private static bool VerifyWithJwks(JsonObject? jwks, ParsedJwt jwt)
+    {
+        if (jwks?["keys"] is not JsonArray keys) return false;
+        foreach (var node in keys)
+        {
+            if (node is not JsonObject key) continue;
+            if (jwt.Kid is not null && OAuthClient.AsString(key["kid"]) != jwt.Kid) continue;
+            if (OAuthClient.AsString(key["use"]) is { } use && use != "sig") continue;
+            if (VerifyWithKey(key, jwt)) return true;
+        }
+        return false;
+    }
+
+    private static bool VerifyWithKey(JsonObject key, ParsedJwt jwt)
+    {
+        try
+        {
+            switch (jwt.Alg)
+            {
+                case "RS256" or "PS256" when OAuthClient.AsString(key["kty"]) == "RSA":
+                {
+                    using var rsa = RSA.Create(new RSAParameters
+                    {
+                        Modulus = Base64Url.DecodeFromChars(OAuthClient.AsString(key["n"]) ?? ""),
+                        Exponent = Base64Url.DecodeFromChars(OAuthClient.AsString(key["e"]) ?? ""),
+                    });
+                    if (rsa.KeySize < MinRsaBits) return false;
+                    var padding = jwt.Alg == "PS256" ? RSASignaturePadding.Pss : RSASignaturePadding.Pkcs1;
+                    return rsa.VerifyData(jwt.SigningInput, jwt.Signature, HashAlgorithmName.SHA256, padding);
+                }
+                case "ES256" when OAuthClient.AsString(key["kty"]) == "EC" && OAuthClient.AsString(key["crv"]) == "P-256":
+                {
+                    using var ecdsa = ECDsa.Create(new ECParameters
+                    {
+                        Curve = ECCurve.NamedCurves.nistP256,
+                        Q = new ECPoint
+                        {
+                            X = Base64Url.DecodeFromChars(OAuthClient.AsString(key["x"]) ?? ""),
+                            Y = Base64Url.DecodeFromChars(OAuthClient.AsString(key["y"]) ?? ""),
+                        },
+                    });
+                    return ecdsa.VerifyData(jwt.SigningInput, jwt.Signature, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+                }
+                default:
+                    return false;
+            }
+        }
+        catch (Exception e) when (e is CryptographicException or FormatException or ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static bool AudienceContains(JsonNode? aud, params string[] accepted) => aud switch
+    {
+        JsonArray many => many.Any(a => OAuthClient.AsString(a) is { } s && accepted.Contains(s, StringComparer.Ordinal)),
+        _ => OAuthClient.AsString(aud) is { } one && accepted.Contains(one, StringComparer.Ordinal),
+    };
+
     // ── Resource server ───────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Signature, type, expiry, issuer and audience — the token must have been minted for this very URL.</summary>
@@ -383,12 +532,15 @@ public sealed class OAuthServer
         return p;
     }
 
-    /// <summary>Best effort, per instance: a code or a rotated refresh token is accepted once.</summary>
     private bool MarkUsed(JsonObject p)
     {
         var jti = OAuthClient.AsString(p["jti"]);
-        if (jti is null) return false;
-        var exp = Long(p["exp"]) ?? Now();
+        return jti is not null && MarkUsed(jti, Long(p["exp"]) ?? Now());
+    }
+
+    /// <summary>Best effort, per instance: a code, a rotated refresh token or a client assertion is accepted once.</summary>
+    private bool MarkUsed(string id, long expires)
+    {
         if (_used.Count > UsedPruneAt)
         {
             var now = Now();
@@ -399,7 +551,7 @@ public sealed class OAuthServer
                 _used.Clear();
             }
         }
-        return _used.TryAdd(jti, exp);
+        return _used.TryAdd(id, expires);
     }
 
     private string ClientSecretFor(string clientId) =>
@@ -407,6 +559,19 @@ public sealed class OAuthServer
 
     private static string ClientHash(string clientId) =>
         Base64Url.EncodeToString(SHA256.HashData(Encoding.UTF8.GetBytes(clientId)));
+
+    /// <summary>For logs: a metadata-document id is a URL worth seeing; a registered id is a long blob, so just its hash prefix.</summary>
+    private static string Describe(string? clientId) => clientId switch
+    {
+        null or "" => "-",
+        _ when clientId.StartsWith("https://", StringComparison.OrdinalIgnoreCase) => OAuthClient.Truncate(clientId, 120),
+        _ => "registered:" + ClientHash(clientId)[..12],
+    };
+
+    private static string AuthStyle(TokenRequest r) =>
+        r.ClientAssertion is not null ? OAuthClient.AuthPrivateKeyJwt
+        : r.ClientSecret is not null ? "client_secret"
+        : OAuthClient.AuthNone;
 
     private static bool PkceVerifies(string verifier, string? challenge) =>
         challenge is not null && FixedEquals(Base64Url.EncodeToString(SHA256.HashData(Encoding.ASCII.GetBytes(verifier))), challenge);
