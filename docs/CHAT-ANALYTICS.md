@@ -252,8 +252,10 @@ embeds a small authorization server, so nothing external is needed:
   `/.well-known/openid-configuration`). An unauthenticated `/mcp` request gets
   `401` with `WWW-Authenticate: Bearer resource_metadata="…", scope="analytics"`.
 - *Clients*: Client ID Metadata Documents (an `https://…/client.json` URL as
-  the client id — what ChatGPT prefers; public clients only, `private_key_jwt`
-  is not implemented) and RFC 7591 dynamic registration at
+  the client id — what ChatGPT uses; such a client authenticates at the token
+  endpoint either as a public client or with `private_key_jwt`, a signed
+  assertion checked against its `jwks_uri` — ChatGPT sends the latter, without
+  a `client_id` in the body) and RFC 7591 dynamic registration at
   `/mcp/oauth/register` (Claude.ai, Claude Code, the Inspector). Registration
   is open; the registered redirect URIs are what a client is later held to.
 - *Flow*: authorization code + PKCE (`S256` required) at

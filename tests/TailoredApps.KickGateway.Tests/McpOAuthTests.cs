@@ -41,7 +41,59 @@ public class McpOAuthTests
 
     private sealed class StubDocuments(Func<string, OAuthClient?> resolve) : IClientMetadataDocuments
     {
+        public JsonObject? Jwks { get; set; }
+        public JsonObject? JwksAfterRefresh { get; set; }
+        public int RefreshCount { get; private set; }
+
         public Task<OAuthClient?> GetAsync(string clientId, CancellationToken ct) => Task.FromResult(resolve(clientId));
+
+        public Task<JsonObject?> GetJwksAsync(string jwksUri, bool refresh, CancellationToken ct)
+        {
+            if (refresh)
+            {
+                RefreshCount++;
+                if (JwksAfterRefresh is not null) Jwks = JwksAfterRefresh;
+            }
+            return Task.FromResult(Jwks);
+        }
+    }
+
+    private static OAuthClient? ChatGptClient(string id) =>
+        id == "https://chatgpt.com/oauth/client.json" ? OAuthClient.FromMetadataDocument(id, JsonNode.Parse(ChatGptClientJson) as JsonObject, out _) : null;
+
+    private static string SignJwt(JsonObject header, JsonObject payload, Func<byte[], byte[]> sign)
+    {
+        var h = Base64Url.EncodeToString(Encoding.UTF8.GetBytes(header.ToJsonString()));
+        var p = Base64Url.EncodeToString(Encoding.UTF8.GetBytes(payload.ToJsonString()));
+        return h + "." + p + "." + Base64Url.EncodeToString(sign(Encoding.ASCII.GetBytes(h + "." + p)));
+    }
+
+    private static JsonObject AssertionPayload(string clientId, string aud, long exp, string? jti = null) => new()
+    {
+        ["iss"] = clientId,
+        ["sub"] = clientId,
+        ["aud"] = aud,
+        ["exp"] = exp,
+        ["iat"] = exp - 300,
+        ["jti"] = jti ?? Guid.NewGuid().ToString("N"),
+    };
+
+    private static JsonObject RsaJwk(RSA rsa, string kid, string alg = "RS256")
+    {
+        var p = rsa.ExportParameters(false);
+        return new JsonObject { ["kty"] = "RSA", ["kid"] = kid, ["use"] = "sig", ["alg"] = alg, ["n"] = Base64Url.EncodeToString(p.Modulus!), ["e"] = Base64Url.EncodeToString(p.Exponent!) };
+    }
+
+    private static JsonObject EcJwk(ECDsa ecdsa, string kid)
+    {
+        var p = ecdsa.ExportParameters(false);
+        return new JsonObject { ["kty"] = "EC", ["kid"] = kid, ["use"] = "sig", ["alg"] = "ES256", ["crv"] = "P-256", ["x"] = Base64Url.EncodeToString(p.Q.X!), ["y"] = Base64Url.EncodeToString(p.Q.Y!) };
+    }
+
+    private static async Task<(string Code, string Verifier)> AuthorizedCode(OAuthServer s, string clientId, string redirect)
+    {
+        var (verifier, challenge) = Pkce();
+        return (s.IssueCode(await ValidAuthorize(s, clientId, challenge, redirect), Urls), verifier);
     }
 
     private static OAuthServer NewServer(TestClock? clock = null, IClientMetadataDocuments? documents = null, Action<McpOAuthOptions>? configure = null)
@@ -259,16 +311,36 @@ public class McpOAuthTests
         Assert.True(client.AllowsRedirect("https://chatgpt.com/connector_platform_oauth_redirect"));
         Assert.Equal("chatgpt.com", client.RedirectHosts);
         Assert.False(client.HasLoopbackRedirect);
+        Assert.True(client.Supports("private_key_jwt"));
+        Assert.Equal("https://chatgpt.com/oauth/jwks.json", client.JwksUri);
 
         var mismatched = (JsonObject)JsonNode.Parse(ChatGptClientJson)!;
         mismatched["client_id"] = "https://chatgpt.com/oauth/other.json";
         Assert.Null(OAuthClient.FromMetadataDocument(url, mismatched, out var problem));
         Assert.Contains("client_id", problem);
 
+        // only private_key_jwt declared: a confidential client, fine as long as it publishes keys
         var jwtOnly = (JsonObject)JsonNode.Parse(ChatGptClientJson)!;
         jwtOnly.Remove("token_endpoint_auth_methods_supported");
+        var confidential = OAuthClient.FromMetadataDocument(url, jwtOnly, out _);
+        Assert.NotNull(confidential);
+        Assert.False(confidential.IsPublic);
+        Assert.True(confidential.Supports("private_key_jwt"));
+        Assert.Equal("https://chatgpt.com/oauth/jwks.json", confidential.JwksUri);
+
+        jwtOnly.Remove("jwks_uri");
         Assert.Null(OAuthClient.FromMetadataDocument(url, jwtOnly, out problem));
-        Assert.Contains("none", problem);
+        Assert.Contains("jwks_uri", problem);
+
+        var badJwks = (JsonObject)JsonNode.Parse(ChatGptClientJson)!;
+        badJwks["jwks_uri"] = "http://chatgpt.com/oauth/jwks.json";
+        Assert.Null(OAuthClient.FromMetadataDocument(url, badJwks, out problem));
+        Assert.Contains("jwks_uri", problem);
+
+        var secretOnly = (JsonObject)JsonNode.Parse(ChatGptClientJson)!;
+        secretOnly["token_endpoint_auth_methods_supported"] = new JsonArray("client_secret_basic");
+        Assert.Null(OAuthClient.FromMetadataDocument(url, secretOnly, out problem));
+        Assert.Contains("neither", problem);
 
         var noRedirects = (JsonObject)JsonNode.Parse(ChatGptClientJson)!;
         noRedirects["redirect_uris"] = new JsonArray("http://chatgpt.com/cb");
@@ -317,6 +389,97 @@ public class McpOAuthTests
     }
 
     [Fact]
+    public async Task Private_key_jwt_assertion_authenticates_a_metadata_document_client_without_client_id()
+    {
+        const string url = "https://chatgpt.com/oauth/client.json";
+        const string chatGptRedirect = "https://chatgpt.com/connector_platform_oauth_redirect";
+        using var rsa = RSA.Create(2048);
+        using var otherRsa = RSA.Create(2048);
+        using var ecdsa = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var documents = new StubDocuments(ChatGptClient) { Jwks = new JsonObject { ["keys"] = new JsonArray(RsaJwk(rsa, "k1"), EcJwk(ecdsa, "ec1")) } };
+        var clock = new TestClock();
+        var s = NewServer(clock, documents);
+        var now = clock.Now.ToUnixTimeSeconds();
+
+        string Rs256(JsonObject payload, RSA key, string kid = "k1", string alg = "RS256") => SignJwt(
+            new JsonObject { ["alg"] = alg, ["kid"] = kid, ["typ"] = "JWT" }, payload,
+            input => key.SignData(input, HashAlgorithmName.SHA256, alg == "PS256" ? RSASignaturePadding.Pss : RSASignaturePadding.Pkcs1));
+        TokenRequest WithAssertion(string code, string verifier, string jwt) =>
+            new("authorization_code", null, null, code, verifier, chatGptRedirect, null, "https://gateway.example.com/mcp", OAuthServer.JwtBearerAssertionType, jwt);
+        async Task<string> Refused(Func<string, string, TokenRequest> request)
+        {
+            var (code, verifier) = await AuthorizedCode(s, url, chatGptRedirect);
+            var result = await s.TokenAsync(request(code, verifier), Urls, default);
+            Assert.NotNull(result.Error);
+            Assert.Equal(401, result.Error.Status);
+            return result.Error.Error + ": " + result.Error.Description;
+        }
+
+        // ChatGPT's shape: client_assertion, no client_id in the body
+        var (code, verifier) = await AuthorizedCode(s, url, chatGptRedirect);
+        var ok = await s.TokenAsync(WithAssertion(code, verifier, Rs256(AssertionPayload(url, Urls.TokenEndpoint, now + 300), rsa)), Urls, default);
+        Assert.Null(ok.Error);
+        Assert.True(s.TryValidateAccessToken(ok.Value!["access_token"]!.GetValue<string>(), Urls, out _));
+        Assert.Equal(0, documents.RefreshCount);
+
+        // also with a matching client_id, aud = issuer, PS256, ES256, and on the refresh grant
+        (code, verifier) = await AuthorizedCode(s, url, chatGptRedirect);
+        Assert.Null((await s.TokenAsync(WithAssertion(code, verifier, Rs256(AssertionPayload(url, Urls.Issuer, now + 300), rsa)) with { ClientId = url }, Urls, default)).Error);
+        (code, verifier) = await AuthorizedCode(s, url, chatGptRedirect);
+        Assert.Null((await s.TokenAsync(WithAssertion(code, verifier, Rs256(AssertionPayload(url, Urls.TokenEndpoint, now + 300), rsa, alg: "PS256")), Urls, default)).Error);
+        (code, verifier) = await AuthorizedCode(s, url, chatGptRedirect);
+        var es256 = SignJwt(new JsonObject { ["alg"] = "ES256", ["kid"] = "ec1" }, AssertionPayload(url, Urls.TokenEndpoint, now + 300),
+            input => ecdsa.SignData(input, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation));
+        Assert.Null((await s.TokenAsync(WithAssertion(code, verifier, es256), Urls, default)).Error);
+        var refreshed = await s.TokenAsync(new TokenRequest("refresh_token", null, null, null, null, null, ok.Value["refresh_token"]!.GetValue<string>(), null,
+            OAuthServer.JwtBearerAssertionType, Rs256(AssertionPayload(url, Urls.TokenEndpoint, now + 300), rsa)), Urls, default);
+        Assert.Null(refreshed.Error);
+
+        // an assertion is accepted once
+        var reused = Rs256(AssertionPayload(url, Urls.TokenEndpoint, now + 300, jti: "same"), rsa);
+        (code, verifier) = await AuthorizedCode(s, url, chatGptRedirect);
+        Assert.Null((await s.TokenAsync(WithAssertion(code, verifier, reused), Urls, default)).Error);
+        Assert.Contains("jti has already been used", await Refused((c, v) => WithAssertion(c, v, reused)));
+
+        Assert.Contains("aud", await Refused((c, v) => WithAssertion(c, v, Rs256(AssertionPayload(url, "https://other.example/token", now + 300), rsa))));
+        Assert.Contains("expired", await Refused((c, v) => WithAssertion(c, v, Rs256(AssertionPayload(url, Urls.TokenEndpoint, now - 1), rsa))));
+        Assert.Contains("does not match", await Refused((c, v) => WithAssertion(c, v, Rs256(AssertionPayload(url, Urls.TokenEndpoint, now + 300), rsa)) with { ClientId = "https://chatgpt.com/oauth/other.json" }));
+        Assert.Contains("unknown client_id", await Refused((c, v) => WithAssertion(c, v, Rs256(AssertionPayload("https://chatgpt.com/oauth/unknown.json", Urls.TokenEndpoint, now + 300), rsa))));
+        Assert.Contains("iss and sub", await Refused((c, v) => WithAssertion(c, v, Rs256(new JsonObject { ["iss"] = url, ["sub"] = "someone-else", ["aud"] = Urls.TokenEndpoint, ["exp"] = now + 300, ["jti"] = "x1" }, rsa))));
+        Assert.Contains("alg must be", await Refused((c, v) => WithAssertion(c, v, SignJwt(new JsonObject { ["alg"] = "HS256" }, AssertionPayload(url, Urls.TokenEndpoint, now + 300), input => HMACSHA256.HashData(new byte[32], input)))));
+        Assert.Contains("not a JWT", await Refused((c, v) => WithAssertion(c, v, "garbage")));
+        Assert.Contains("client_assertion_type", await Refused((c, v) => WithAssertion(c, v, reused) with { ClientAssertionType = "urn:ietf:params:oauth:client-assertion-type:saml2-bearer" }));
+
+        // signed by someone else under a known kid: no refetch, just no
+        Assert.Contains("does not verify", await Refused((c, v) => WithAssertion(c, v, Rs256(AssertionPayload(url, Urls.TokenEndpoint, now + 300), otherRsa))));
+        Assert.Equal(0, documents.RefreshCount);
+
+        // an unknown kid means the client may have rotated keys: one cache-bypassing refetch
+        Assert.Contains("no key", await Refused((c, v) => WithAssertion(c, v, Rs256(AssertionPayload(url, Urls.TokenEndpoint, now + 300), otherRsa, kid: "k2"))));
+        Assert.Equal(1, documents.RefreshCount);
+        documents.JwksAfterRefresh = new JsonObject { ["keys"] = new JsonArray(RsaJwk(rsa, "k1"), RsaJwk(otherRsa, "k2")) };
+        (code, verifier) = await AuthorizedCode(s, url, chatGptRedirect);
+        Assert.Null((await s.TokenAsync(WithAssertion(code, verifier, Rs256(AssertionPayload(url, Urls.TokenEndpoint, now + 300), otherRsa, kid: "k2")), Urls, default)).Error);
+        Assert.Equal(2, documents.RefreshCount);
+
+        // a registered (DCR) client cannot use assertions, and a private_key_jwt-only client cannot skip them
+        var registered = RegisterPublic(s);
+        var (dcrCode, dcrVerifier) = await AuthorizedCode(s, registered, Redirect);
+        var dcrResult = await s.TokenAsync(WithAssertion(dcrCode, dcrVerifier, Rs256(AssertionPayload(registered, Urls.TokenEndpoint, now + 300), rsa)) with { RedirectUri = Redirect }, Urls, default);
+        Assert.Contains("not registered for private_key_jwt", dcrResult.Error?.Description);
+
+        const string jwtOnlyUrl = "https://chatgpt.com/oauth/jwt-only.json";
+        var jwtOnlyDoc = (JsonObject)JsonNode.Parse(ChatGptClientJson)!;
+        jwtOnlyDoc["client_id"] = jwtOnlyUrl;
+        jwtOnlyDoc.Remove("token_endpoint_auth_methods_supported");
+        var strict = NewServer(clock, new StubDocuments(id => id == jwtOnlyUrl ? OAuthClient.FromMetadataDocument(jwtOnlyUrl, jwtOnlyDoc, out _) : null) { Jwks = documents.Jwks });
+        var (strictCode, strictVerifier) = await AuthorizedCode(strict, jwtOnlyUrl, chatGptRedirect);
+        var noAssertion = await strict.TokenAsync(CodeGrant(jwtOnlyUrl, strictCode, strictVerifier, redirect: chatGptRedirect), Urls, default);
+        Assert.Equal("invalid_client", noAssertion.Error?.Error);
+        Assert.Null((await strict.TokenAsync(WithAssertion(strictCode, strictVerifier, Rs256(AssertionPayload(jwtOnlyUrl, Urls.TokenEndpoint, now + 300), rsa)), Urls, default)).Error);
+    }
+
+    [Fact]
     public void Metadata_documents_and_challenges_point_at_this_origin()
     {
         var s = NewServer();
@@ -331,7 +494,10 @@ public class McpOAuthTests
         Assert.Equal("https://gateway.example.com/mcp/oauth/token", server["token_endpoint"]!.GetValue<string>());
         Assert.Equal("https://gateway.example.com/mcp/oauth/register", server["registration_endpoint"]!.GetValue<string>());
         Assert.Equal(["S256"], server["code_challenge_methods_supported"]!.AsArray().Select(n => n!.GetValue<string>()));
-        Assert.Contains("none", server["token_endpoint_auth_methods_supported"]!.AsArray().Select(n => n!.GetValue<string>()));
+        var authMethods = server["token_endpoint_auth_methods_supported"]!.AsArray().Select(n => n!.GetValue<string>()).ToList();
+        Assert.Contains("none", authMethods);
+        Assert.Contains("private_key_jwt", authMethods);
+        Assert.Equal(["RS256", "PS256", "ES256"], server["token_endpoint_auth_signing_alg_values_supported"]!.AsArray().Select(n => n!.GetValue<string>()));
         Assert.True(server["client_id_metadata_document_supported"]!.GetValue<bool>());
         Assert.True(server["authorization_response_iss_parameter_supported"]!.GetValue<bool>());
         Assert.Null(NewServer(configure: o => o.AllowDynamicRegistration = false).AuthorizationServerMetadata(Urls)["registration_endpoint"]);
@@ -510,6 +676,15 @@ public class McpOAuthTests
 
             using var notForm = await http.PostAsync(tokenEndpoint, new StringContent("{}", Encoding.UTF8, "application/json"));
             Assert.Equal(HttpStatusCode.BadRequest, notForm.StatusCode);
+
+            // the assertion fields reach the server (no client_id at all, like ChatGPT's private_key_jwt request)
+            using var badAssertion = await http.PostAsync(tokenEndpoint, new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["grant_type"] = "authorization_code", ["code"] = code, ["code_verifier"] = verifier,
+                ["client_assertion_type"] = "urn:ietf:params:oauth:client-assertion-type:saml2-bearer", ["client_assertion"] = "x.y.z",
+            }));
+            Assert.Equal(HttpStatusCode.Unauthorized, badAssertion.StatusCode);
+            Assert.Contains("client_assertion_type", (JsonNode.Parse(await badAssertion.Content.ReadAsStringAsync()) as JsonObject)!["error_description"]!.GetValue<string>());
 
             // 9. a confidential client authenticates with Basic
             using var confidential = await http.PostAsync(serverMetadata["registration_endpoint"]!.GetValue<string>(),
