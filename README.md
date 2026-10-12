@@ -87,8 +87,9 @@ docs/CHAT-ANALYTICS.md                        # Chatter profiles + interaction g
   `ChatMentions`, `ChatterEvents`) and serves read-only chatter profiles, pair
   dynamics and a who-talks-to-whom graph under `/api/analytics/*` (admin cookie or
   `Analytics:ApiKey`); with the transcriber running it also serves the stored speech
-  (`/transcripts`) and a channel timeline that merges what the stream said, what happened
-  and what chat wrote by stream time (`/timeline`). `TailoredApps.KickGateway.Mcp` exposes
+  (`/transcripts`), a channel timeline that merges what the stream said, what happened
+  and what chat wrote by stream time (`/timeline`), how chat reacted to one sentence
+  (`/transcripts/{id}/reactions`) and transcript coverage in `/status` and `/overview`. `TailoredApps.KickGateway.Mcp` exposes
   those as MCP tools for Claude & co. It is deployed as the `mcp` container at `https://${PUBLIC_HOST}/mcp`
   (Bearer = the analytics key, or OAuth 2.1 with PKCE for ChatGPT / Claude.ai — the container embeds the
   authorization server and its consent page takes that same key) and can also run locally over stdio. See

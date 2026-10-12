@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using TailoredApps.KickGateway.Api.Data;
+using TailoredApps.KickGateway.Api.Transcripts;
 
 namespace TailoredApps.KickGateway.Api.Analytics;
 
@@ -67,7 +68,8 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
             ChatterEvents: await Events(scope).LongCountAsync(ct),
             OldestMessageAt: await messages.MinAsync(m => (DateTime?)m.CreatedAt, ct),
             NewestMessageAt: await messages.MaxAsync(m => (DateTime?)m.CreatedAt, ct),
-            ChannelsInScope: scope.Slugs?.OrderBy(s => s, StringComparer.Ordinal).ToList());
+            ChannelsInScope: scope.Slugs?.OrderBy(s => s, StringComparer.Ordinal).ToList(),
+            Transcripts: await TranscriptCoverageQueries.StatusAsync(db, scope, DateTime.UtcNow, ct));
 
         static ProjectionStatus Projection(string source, AnalyticsCheckpoint? cp, long pending) => new(
             source,
@@ -129,6 +131,7 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
 
         var top = await ChattersAsync(scope, slug, window, "messages", 15, 0, ct);
         var events = await EventTotalsAsync(scope, slug, window, ct);
+        var speech = await TranscriptCoverageQueries.WindowAsync(db, slug, window, ct);
 
         return new ChannelOverview(
             slug, window, messages, chatters, newChatters, chatters - newChatters,
@@ -136,7 +139,8 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
             byHour,
             daily.Select(d => new DailyActivity(d.Day, d.Messages, d.Chatters)).ToList(),
             top.Chatters,
-            events);
+            events,
+            speech.Slices == 0 ? null : speech);
     }
 
     public static readonly string[] ChatterSorts = { "messages", "active_days", "replies", "last_seen", "first_seen" };

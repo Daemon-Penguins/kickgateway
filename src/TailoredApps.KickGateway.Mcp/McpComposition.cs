@@ -5,7 +5,7 @@ namespace TailoredApps.KickGateway.Mcp;
 /// <summary>What both transports share: the gateway HTTP client and the MCP server with its tools + instructions.</summary>
 internal static class McpComposition
 {
-    public const string Version = "1.3.0";
+    public const string Version = "1.4.0";
 
     public static void AddGateway(IServiceCollection services, IConfiguration config)
     {
@@ -39,9 +39,10 @@ internal static class McpComposition
         3. chatter_profile for one person; chatter_relationship for a pair; find_chatters when you only have a partial name.
         4. search_messages / message_context to read the actual messages behind any number before drawing conclusions
            about tone, intent or relationships — the aggregates are signals, not verdicts.
-        5. When the channel has live transcripts (speech-to-text of the stream's audio): stream_timeline for what the
-           stream SAID, what HAPPENED and what chat WROTE in one chronology; search_transcripts to find when something was
-           said; transcript_at for the speech behind one chat message.
+        5. When the channel has live transcripts (speech-to-text of the stream's audio; analytics_status / channel_overview
+           say whether it does): stream_timeline for what the stream SAID, what HAPPENED and what chat WROTE in one
+           chronology; search_transcripts to find when something was said; transcript_at for the speech behind one chat
+           message; speech_reactions for the chat that followed one sentence, with its rate against the minute before.
 
         Conventions: all times are UTC. 'from'/'to' accept ISO-8601, look-backs like 12h/7d/4w, or 'all'. Channel-level tools
         default to the last 7 days (stream_timeline: the last hour); per-person tools default to all history (a response

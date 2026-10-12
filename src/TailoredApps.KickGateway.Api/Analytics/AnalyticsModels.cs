@@ -1,3 +1,5 @@
+using TailoredApps.KickGateway.Api.Transcripts;
+
 namespace TailoredApps.KickGateway.Api.Analytics;
 
 // Response shapes of /api/analytics/*. Kept flat and self-describing because the main consumer
@@ -23,7 +25,9 @@ public sealed record AnalyticsStatus(
     long ChatterEvents,
     DateTime? OldestMessageAt,
     DateTime? NewestMessageAt,
-    IReadOnlyList<string>? ChannelsInScope);
+    IReadOnlyList<string>? ChannelsInScope,
+    /// <summary>Speech-to-text coverage per channel (see <see cref="TranscriptCoverage"/>); empty channel list = no transcripts stored.</summary>
+    TranscriptCoverage Transcripts);
 
 public sealed record ChannelSummary(string Slug, int Messages, int Chatters, DateTime FirstMessageAt, DateTime LastMessageAt);
 
@@ -68,7 +72,9 @@ public sealed record ChannelOverview(
     int[] MessagesByHourUtc,
     IReadOnlyList<DailyActivity> Daily,
     IReadOnlyList<ChatterSummary> TopChatters,
-    ChannelEventTotals Events);
+    ChannelEventTotals Events,
+    /// <summary>Speech-to-text in the window; omitted when the channel has no slices there.</summary>
+    TranscriptWindowCoverage? Transcripts);
 
 public sealed record ChatterPage(string Slug, AnalyticsWindow Window, string Sort, int Total, int Offset, IReadOnlyList<ChatterSummary> Chatters);
 
