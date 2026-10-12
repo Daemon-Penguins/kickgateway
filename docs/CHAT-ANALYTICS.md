@@ -225,11 +225,14 @@ tools default to `segments=false` (text only) to keep responses small.
 
 ### Remote: the deployed `mcp` container (no local install)
 
-`deploy.yml` runs it as the `mcp` service. Traefik routes
-`https://<host>/mcp` to it, it calls the Api over the internal network
-(`http://api:8080`), and clients authenticate with the same analytics key
-(`ANALYTICS_API_KEY`), sent as `Authorization: Bearer` or `X-Api-Key`. It
-fails closed: a missing or short key rejects every request.
+`deploy.yml` runs it as the `mcp` service. Traefik routes `https://<host>/mcp`
+(plus the OAuth well-known paths) to it, it calls the Api over the internal
+network (`http://api:8080`), and clients authenticate in one of two ways. Both
+end at the same tools, and the server fails closed: a missing or short
+`ANALYTICS_API_KEY` rejects every request.
+
+**API key** — the analytics key as `Authorization: Bearer` or `X-Api-Key`, for
+clients that let you set a header:
 
 ```bash
 claude mcp add --transport http kick-chat-analytics https://<host>/mcp \
@@ -238,6 +241,43 @@ claude mcp add --transport http kick-chat-analytics https://<host>/mcp \
 
 Claude Code stores the header in its config. Use a client-specific secret
 store if you'd rather not keep the key in plain text.
+
+**OAuth 2.1** — for clients that only speak OAuth (ChatGPT connectors and the
+Apps SDK, Claude.ai custom connectors, the MCP Inspector…). The container
+embeds a small authorization server, so nothing external is needed:
+
+- *Discovery*: `/.well-known/oauth-protected-resource` (RFC 9728, also at
+  `/.well-known/oauth-protected-resource/mcp`) and
+  `/.well-known/oauth-authorization-server` (RFC 8414, also as
+  `/.well-known/openid-configuration`). An unauthenticated `/mcp` request gets
+  `401` with `WWW-Authenticate: Bearer resource_metadata="…", scope="analytics"`.
+- *Clients*: Client ID Metadata Documents (an `https://…/client.json` URL as
+  the client id — what ChatGPT prefers; public clients only, `private_key_jwt`
+  is not implemented) and RFC 7591 dynamic registration at
+  `/mcp/oauth/register` (Claude.ai, Claude Code, the Inspector). Registration
+  is open; the registered redirect URIs are what a client is later held to.
+- *Flow*: authorization code + PKCE (`S256` required) at
+  `/mcp/oauth/authorize`, tokens at `/mcp/oauth/token`, the RFC 8707
+  `resource` checked against `https://<host>/mcp`, `iss` echoed in the redirect
+  (RFC 9207). The consent page asks for the analytics API key — that is the
+  "login"; it shows the client's name and redirect host. Access tokens live
+  60 min, refresh tokens are rotated, and the grant as a whole expires after
+  90 days (then the client re-prompts). One scope: `analytics`.
+- *Stateless*: client ids, codes and tokens are HMAC-signed claims (the key is
+  derived from the API key unless `Mcp__OAuth__SigningKey` is set), so restarts
+  and replicas need no shared store, and rotating the API key revokes every
+  token at once. Replay protection for codes and rotated refresh tokens is
+  in-memory, per instance.
+
+To connect ChatGPT: *Settings → Connectors → Create* (Developer mode), server
+URL `https://<host>/mcp`, authentication **OAuth**, client id/secret left
+empty. ChatGPT discovers the metadata and opens the consent page; paste the key
+and approve. Claude.ai custom connectors work the same way. The Responses API
+does not need OAuth: pass the key in the `mcp` tool's `headers`.
+
+`Mcp__PublicBaseUrl` (deploy.yml sets `https://${PUBLIC_HOST}`) pins the
+issuer and resource URLs; without it they are derived from the forwarded
+request headers. `Mcp__OAuth__Enabled=false` turns OAuth off (API key only).
 
 ### Local: stdio
 
@@ -249,7 +289,12 @@ Configuration (environment variables, or user-secrets on the Mcp project):
 | `KickGateway__ApiKey` | Same value as the gateway's `Analytics__ApiKey` |
 | `KickGateway__TimeoutSeconds` | HTTP timeout (default 90) |
 | `Mcp__Transport` | `http` = Streamable HTTP at `/mcp` (what the container sets); default stdio. `--http` works too. |
-| `Mcp__ClientApiKey` | HTTP mode only: key clients must present. Defaults to `KickGateway__ApiKey`. |
+| `Mcp__ClientApiKey` | HTTP mode only: key clients must present (and the OAuth consent page asks for). Defaults to `KickGateway__ApiKey`. |
+| `Mcp__PublicBaseUrl` | HTTP mode only: public origin (`https://host`, no path) used for the OAuth issuer, resource and endpoint URLs. |
+| `Mcp__OAuth__Enabled` | HTTP mode only: the embedded OAuth 2.1 server (default `true`). |
+| `Mcp__OAuth__SigningKey` | Optional separate token-signing secret; default derives from the client key. |
+| `Mcp__OAuth__AccessTokenMinutes` / `RefreshTokenDays` / `AuthorizationCodeSeconds` | Lifetimes (defaults 60 / 90 / 300). |
+| `Mcp__OAuth__AllowClientMetadataDocuments` / `AllowDynamicRegistration` | Which client registration styles to accept (both default `true`). |
 
 Build it once, since the MCP client launches the binary:
 

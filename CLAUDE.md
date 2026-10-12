@@ -232,8 +232,14 @@ Status: actively developed.
   bounded index seeks per page, merged in memory - never a join or a scan over the chat tables. The
   MCP server (`TailoredApps.KickGateway.Mcp`) is a dumb adapter over that REST API — no
   DB access, no analysis of its own — running either locally over stdio or deployed as the
-  `mcp` container (Streamable HTTP; Traefik routes `https://<host>/mcp` to it, clients use
-  the same analytics key, it calls the Api at `http://api:8080`). See `docs/CHAT-ANALYTICS.md`.
+  `mcp` container (Streamable HTTP; Traefik routes `https://<host>/mcp` to it, it calls the
+  Api at `http://api:8080`). Clients present the analytics key (Bearer / `X-Api-Key`) **or**
+  an OAuth 2.1 access token: the container embeds a stateless authorization server
+  (`OAuthServer` — PKCE S256, RFC 7591 registration + Client ID Metadata Documents, RFC 8707
+  audience = `https://<host>/mcp`) whose consent page takes that same key, and every client
+  id / code / token is an HMAC-signed claim set (key derived from the API key) — no DB, so
+  revocation = rotate the key. The well-known metadata paths sit at the host root, so
+  Traefik's `mcp` router must match them too (deploy.yml). See `docs/CHAT-ANALYTICS.md`.
 - **DbContext lives in `TailoredApps.KickGateway.Data`.** `KickGatewayDbContext` +
   entities + migrations are a shared library referenced by both the Api and the
   Realtime listener (the Realtime service needs the roster + realtime inbox). The Api
