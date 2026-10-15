@@ -67,6 +67,10 @@ public static class KickGatewayMetrics
         "kickgateway.realtime.ingest.dropped", "{frame}",
         "Pusher frames dropped before ingest because the worker's queue was full.");
 
+    private static readonly Counter<long> RealtimeConnectionErrors = Meter.CreateCounter<long>(
+        "kickgateway.realtime.connection.errors", "{session}",
+        "Pusher sessions that ended abnormally: refused (4000-4099: the app key / cluster is wrong - Kick rotated it), pusher_error (other pusher:error codes), dropped (socket error) or closed (by the server).");
+
     private static readonly Histogram<double> EventDeliveryLag = Meter.CreateHistogram<double>(
         "kickgateway.event.delivery_lag", "s",
         "End to end: from a Kick webhook reaching the gateway to the published event reaching a subscriber in the Api (outbox + RabbitMQ + consume).",
@@ -97,6 +101,13 @@ public static class KickGatewayMetrics
 
     public static void RecordRealtimeDrop(string reason) =>
         RealtimeIngestDropped.Add(1, new KeyValuePair<string, object?>("reason", reason));
+
+    /// <param name="reason"><c>refused</c>, <c>pusher_error</c>, <c>dropped</c> or <c>closed</c>.</param>
+    /// <param name="pusherCode">The <c>pusher:error</c> code (4001 ...), 0 when there was none.</param>
+    public static void RecordRealtimeConnectionError(string reason, int pusherCode) =>
+        RealtimeConnectionErrors.Add(1,
+            new KeyValuePair<string, object?>("reason", reason),
+            new KeyValuePair<string, object?>("pusher.code", pusherCode));
 
     public static void RecordEventDeliveryLag(string? eventType, TimeSpan lag) =>
         EventDeliveryLag.Record(Seconds(lag), new KeyValuePair<string, object?>("kick.event_type", Tag(eventType)));

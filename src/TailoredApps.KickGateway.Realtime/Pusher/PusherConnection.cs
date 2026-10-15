@@ -2,11 +2,26 @@ using System.Buffers;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using TailoredApps.KickGateway.Telemetry;
 
 namespace TailoredApps.KickGateway.Realtime.Pusher;
 
 /// <summary>One decoded Pusher frame. <see cref="Data"/> is the inner payload text (for app events, itself JSON).</summary>
 public record PusherFrame(string Event, string? Channel, string Data);
+
+/// <summary>
+/// A <c>pusher:error</c> frame. Codes 4000-4099 mean Pusher closed the connection on purpose and will
+/// keep refusing the same parameters (app key, cluster) - since 2026-10 that is what a rotated Kick
+/// app key looks like (4001 "App key ... not in this cluster"); 4100-4199 ask for a slower retry,
+/// 4200-4299 for an immediate one.
+/// </summary>
+public sealed class PusherErrorException(int code, string message) : IOException(message)
+{
+    public int Code { get; } = code;
+
+    /// <summary>True when reconnecting with the same app key / host is pointless.</summary>
+    public bool Refused => Code is >= 4000 and <= 4099;
+}
 
 /// <summary>
 /// A single resilient Pusher WebSocket connection. Owns its own reconnect loop, keepalive
@@ -30,6 +45,7 @@ public sealed class PusherConnection : IAsyncDisposable
     private CancellationTokenSource? _cts;
     private Task? _loop;
     private int _pingIntervalSeconds;
+    private volatile bool _established;
 
     public PusherConnection(int id, Uri uri, RealtimeOptions opts, ILogger log, Func<PusherFrame, Task> onAppEvent)
     {
@@ -72,6 +88,9 @@ public sealed class PusherConnection : IAsyncDisposable
         while (!ct.IsCancellationRequested)
         {
             using var session = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            _established = false;
+            PusherErrorException? pusherError = null;
+            Exception? failure = null;
             try
             {
                 using var ws = new ClientWebSocket();
@@ -84,7 +103,6 @@ public sealed class PusherConnection : IAsyncDisposable
                 lock (_gate) snapshot = _channels.ToArray();
                 foreach (var ch in snapshot) await SendSubscribeAsync(ch, ct);
 
-                backoff = _opts.ReconnectMinSeconds; // reset after a clean connect
                 var heartbeat = HeartbeatAsync(session.Token);
                 await ReceiveLoopAsync(ws, session.Token);
                 session.Cancel();
@@ -94,9 +112,13 @@ public sealed class PusherConnection : IAsyncDisposable
             {
                 break;
             }
+            catch (PusherErrorException ex)
+            {
+                pusherError = ex;
+            }
             catch (Exception ex)
             {
-                _log.LogWarning(ex, "Pusher conn #{Id} dropped; reconnecting in {Backoff}s", _id, backoff);
+                failure = ex;
             }
             finally
             {
@@ -105,9 +127,52 @@ public sealed class PusherConnection : IAsyncDisposable
             }
 
             if (ct.IsCancellationRequested) break;
+
+            // The WebSocket handshake alone proves nothing - a refused app key completes it and the
+            // pusher:error arrives a moment later - so only a session that reached
+            // pusher:connection_established earns the short delay back; a refusal waits the maximum.
+            var refused = pusherError?.Refused == true;
+            backoff = NextBackoff(backoff, _established, refused, _opts.ReconnectMinSeconds, _opts.ReconnectMaxSeconds);
+
+            if (refused)
+            {
+                KickGatewayMetrics.RecordRealtimeConnectionError("refused", pusherError!.Code);
+                _log.LogError("Pusher conn #{Id} refused by Pusher ({Code}: {Message}). Kick rotated its app key or cluster: " +
+                    "set Kick:Realtime:AppKey / WsHost (KICK_REALTIME_APP_KEY / KICK_REALTIME_WS_HOST on the VPS; CLAUDE.md says how to fetch the current one). " +
+                    "Retrying in {Backoff}s", _id, pusherError.Code, pusherError.Message, backoff);
+            }
+            else if (pusherError is not null)
+            {
+                KickGatewayMetrics.RecordRealtimeConnectionError("pusher_error", pusherError.Code);
+                _log.LogWarning("Pusher conn #{Id} got pusher:error {Code}: {Message}; reconnecting in {Backoff}s", _id, pusherError.Code, pusherError.Message, backoff);
+            }
+            else if (failure is not null)
+            {
+                KickGatewayMetrics.RecordRealtimeConnectionError("dropped", 0);
+                _log.LogWarning(failure, "Pusher conn #{Id} dropped; reconnecting in {Backoff}s", _id, backoff);
+            }
+            else
+            {
+                KickGatewayMetrics.RecordRealtimeConnectionError("closed", 0);
+                _log.LogInformation("Pusher conn #{Id} closed by the server; reconnecting in {Backoff}s", _id, backoff);
+            }
+
             await DelayAsync(TimeSpan.FromSeconds(backoff) + Jitter(), ct);
-            backoff = Math.Min(_opts.ReconnectMaxSeconds, Math.Max(1, backoff) * 2);
         }
+    }
+
+    /// <summary>
+    /// Seconds to wait before the next connection attempt, given the previous wait and how the last
+    /// session ended: a refusal (4000-4099) waits <paramref name="max"/>, a session that was established
+    /// starts over at <paramref name="min"/>, anything else doubles up to <paramref name="max"/>.
+    /// </summary>
+    public static int NextBackoff(int previous, bool established, bool refused, int min, int max)
+    {
+        min = Math.Max(1, min);
+        max = Math.Max(min, max);
+        if (refused) return max;
+        if (established) return min;
+        return Math.Min(max, Math.Max(min, previous) * 2);
     }
 
     private async Task ReceiveLoopAsync(ClientWebSocket ws, CancellationToken ct)
@@ -139,8 +204,9 @@ public sealed class PusherConnection : IAsyncDisposable
                 OnEstablished(frame.Data);
                 return;
             case "pusher:error":
-                _log.LogWarning("Pusher conn #{Id} error: {Data}", _id, Truncate(frame.Data, 300));
-                throw new IOException("pusher:error → reconnect"); // bubble up to reconnect w/ backoff
+                // Bubbles up to RunAsync, which decides how long to wait before reconnecting.
+                TryParseError(frame.Data, out var code, out var message);
+                throw new PusherErrorException(code, message);
         }
 
         if (evt.StartsWith("pusher_internal:", StringComparison.Ordinal))
@@ -156,6 +222,7 @@ public sealed class PusherConnection : IAsyncDisposable
 
     private void OnEstablished(string data)
     {
+        _established = true;
         try
         {
             using var doc = JsonDocument.Parse(data);
@@ -244,6 +311,29 @@ public sealed class PusherConnection : IAsyncDisposable
             data = d.ValueKind == JsonValueKind.String ? (d.GetString() ?? "") : d.GetRawText();
 
         return new PusherFrame(ev.GetString() ?? "", channel, data);
+    }
+
+    /// <summary>
+    /// Reads a <c>pusher:error</c> payload (<c>{"code":4001,"message":"..."}</c>). Returns false, code 0 and
+    /// the raw (truncated) text when it is not that shape - Pusher's error data is itself JSON, but be lenient.
+    /// </summary>
+    public static bool TryParseError(string data, out int code, out string message)
+    {
+        code = 0;
+        message = Truncate(data, 300);
+        try
+        {
+            using var doc = JsonDocument.Parse(data);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            if (root.TryGetProperty("code", out var c) && c.ValueKind == JsonValueKind.Number && c.TryGetInt32(out var parsed)) code = parsed;
+            if (root.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String) message = Truncate(m.GetString() ?? "", 300);
+            return code != 0;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static TimeSpan Jitter() => TimeSpan.FromMilliseconds(Random.Shared.Next(0, 750));
