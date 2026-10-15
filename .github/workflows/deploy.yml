@@ -193,7 +193,7 @@ jobs:
 
           # The production compose file lives in the repo (deploy/docker-compose.prod.yml) and is shipped
           # verbatim; docker compose interpolates its ${VAR}s from the .env written below. (An inline heredoc
-          # with ${{ }} inside would count towards GitHub's 21000-character expression limit per step.)
+          # with GitHub expressions inside would count towards the 21000-character expression limit per step.)
 
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             deploy/docker-compose.prod.yml \
