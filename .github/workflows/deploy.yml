@@ -195,6 +195,11 @@ jobs:
                 - Seed__SuperAdminUsername=${SEED_SUPERADMIN_USERNAME:-}
                 # Optional: API-key access to /api/analytics/* (MCP server). Empty = admin cookie only.
                 - Analytics__ApiKey=${ANALYTICS_API_KEY:-}
+                - OTEL_SERVICE_NAME=kickgateway-api
+              # OpenTelemetry export (OTEL_EXPORTER_OTLP_* + interval) shared by every .NET container; see docs/MONITORING.md.
+              env_file:
+                - path: otel.env
+                  required: false
               networks:
                 - default
                 - traefik-public
@@ -221,6 +226,10 @@ jobs:
                 - RabbitMq__VirtualHost=${RABBITMQ_VHOST:-/}
                 - RabbitMq__Username=${RABBITMQ_USERNAME:-}
                 - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
+                - OTEL_SERVICE_NAME=kickgateway-worker
+              env_file:
+                - path: otel.env
+                  required: false
               networks:
                 - default
                 - traefik-public
@@ -245,6 +254,10 @@ jobs:
                 - Kick__Realtime__Video__Enabled=${REALTIME_VIDEO_ENABLED:-false}
                 # Highest rendition under this cap is captured (audio for the transcriber + the subtitles relay).
                 - Kick__Realtime__Video__MaxBitrateKbps=${REALTIME_VIDEO_MAX_BITRATE_KBPS:-1500}
+                - OTEL_SERVICE_NAME=kickgateway-realtime
+              env_file:
+                - path: otel.env
+                  required: false
               networks:
                 - default
                 - traefik-public
@@ -301,6 +314,10 @@ jobs:
                 # Delayed player (token-gated relay of the captured segments). Empty token = relay off.
                 - Subtitles__Relay__Token=${SUBTITLES_RELAY_TOKEN:-}
                 - Subtitles__Relay__MaxViewersPerChannel=${SUBTITLES_RELAY_MAX_VIEWERS:-3}
+                - OTEL_SERVICE_NAME=kickgateway-subtitles
+              env_file:
+                - path: otel.env
+                  required: false
               networks:
                 - default
                 - traefik-public
@@ -339,8 +356,13 @@ jobs:
                 - Translator__Provider__Model=${TRANSLATOR_MODEL:-}
                 - Translator__Provider__BaseUrl=${TRANSLATOR_BASE_URL:-}
                 - Translator__Provider__Formality=${TRANSLATOR_FORMALITY:-prefer_less}
+                - OTEL_SERVICE_NAME=kickgateway-translator
+              env_file:
+                - path: otel.env
+                  required: false
               networks:
                 - default
+                - traefik-public   # the OTLP collector (alloy) lives there, like rabbitmq
 
             # Live speech-to-text, CPU only (no GPU on the VPS), OPT-IN. Consumes LiveVideoSegment - so it only
             # works while REALTIME_VIDEO_ENABLED=true and a channel is live - and publishes LiveTranscript,
@@ -376,6 +398,10 @@ jobs:
                 - Transcriber__WriteFiles=${TRANSCRIBER_WRITE_FILES:-false}
                 - Transcriber__ModelDir=/models
                 - Transcriber__OutputDir=/transcripts
+                - OTEL_SERVICE_NAME=kickgateway-transcriber
+              env_file:
+                - path: otel.env
+                  required: false
               volumes:
                 - transcriber-models:/models
                 - transcriber-transcripts:/transcripts
@@ -442,6 +468,26 @@ jobs:
           TRANSCRIBER_LANGUAGE_CONFIRM_CHUNKS=${{ vars.TRANSCRIBER_LANGUAGE_CONFIRM_CHUNKS }}
           TRANSCRIBER_THREADS=${{ vars.TRANSCRIBER_THREADS }}
           TRANSCRIBER_WRITE_FILES=${{ vars.TRANSCRIBER_WRITE_FILES }}
+          ENVFILE"
+
+          # OpenTelemetry export for every .NET container (docs/MONITORING.md). On the HQ VPS hq-config also
+          # injects the endpoint centrally (docker-compose.override.yml -> http://alloy:4317, grpc) and a
+          # compose override's `environment` beats this env_file; the secret there is http://alloy:4318 (Alloy's
+          # HTTP port, matching the default protocol below) so profile containers that the override has not
+          # caught up with yet export too. Elsewhere: one endpoint for all signals (Collector / Alloy) or a
+          # metrics-only one (Prometheus' OTLP receiver). Empty = export off (ServiceDefaults and the SDK treat
+          # an empty variable as unset). Traces are sampled parent-based, otherwise MassTransit emits a span
+          # per chat message into Tempo. service.namespace mirrors what the HQ override sets, so the
+          # Prometheus `job` label (namespace/name) is the same either way.
+          $SSH_CMD "cat > /opt/apps/kickgateway/otel.env << 'ENVFILE'
+          OTEL_EXPORTER_OTLP_ENDPOINT=${{ secrets.OTEL_EXPORTER_OTLP_ENDPOINT }}
+          OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=${{ secrets.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT }}
+          OTEL_EXPORTER_OTLP_HEADERS=${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
+          OTEL_EXPORTER_OTLP_PROTOCOL=${{ vars.OTEL_EXPORTER_OTLP_PROTOCOL || 'http/protobuf' }}
+          OTEL_METRIC_EXPORT_INTERVAL=${{ vars.OTEL_METRIC_EXPORT_INTERVAL || '15000' }}
+          OTEL_TRACES_SAMPLER=parentbased_traceidratio
+          OTEL_TRACES_SAMPLER_ARG=${{ vars.OTEL_TRACES_SAMPLER_ARG || '0.1' }}
+          OTEL_RESOURCE_ATTRIBUTES=service.namespace=kickgateway,deployment.environment=production
           ENVFILE"
 
           # Ensure shared external networks exist (idempotent).

@@ -6,6 +6,16 @@ using TailoredApps.KickGateway.Contracts.Realtime;
 
 namespace TailoredApps.KickGateway.Realtime.Ingest;
 
+/// <summary>Result of recording one realtime frame in the inbox + outbox.</summary>
+public enum IngestOutcome
+{
+    /// <summary>Inbox row inserted and the publish committed through the outbox.</summary>
+    Published,
+
+    /// <summary>The dedupe key already existed (Pusher redelivers on reconnect) - nothing published.</summary>
+    Duplicate,
+}
+
 /// <summary>
 /// Records + publishes a realtime event with the same inbox+outbox guarantee as the webhook
 /// path (<c>KickWebhookDispatcher</c>): a <see cref="ReceivedRealtimeEvent"/> dedupe row and
@@ -24,7 +34,7 @@ public class RealtimeIngestService
         _log = log;
     }
 
-    public async Task IngestAsync(IKickRealtimeEvent evt, CancellationToken ct)
+    public async Task<IngestOutcome> IngestAsync(IKickRealtimeEvent evt, CancellationToken ct)
     {
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<KickGatewayDbContext>();
@@ -50,10 +60,12 @@ public class RealtimeIngestService
         try
         {
             await db.SaveChangesAsync(ct);
+            return IngestOutcome.Published;
         }
         catch (DbUpdateException ex) when (IsDuplicateKey(ex))
         {
             _log.LogDebug("Duplicate realtime frame {Key} ({Event}) — skipped", evt.DedupeKey, evt.PusherEvent);
+            return IngestOutcome.Duplicate;
         }
     }
 

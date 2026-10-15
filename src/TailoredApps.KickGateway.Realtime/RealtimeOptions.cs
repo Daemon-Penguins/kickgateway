@@ -38,6 +38,24 @@ public class RealtimeOptions
     public int ReconnectMinSeconds { get; set; } = 1;
     public int ReconnectMaxSeconds { get; set; } = 30;
 
+    // === Ingest (frame → inbox + outbox) ===
+
+    /// <summary>
+    /// Ingest workers (= queue partitions). Frames are hashed by Pusher channel, so one worker keeps a
+    /// chatroom's frames in order while other channels commit in parallel; each worker holds one DB
+    /// connection while busy.
+    /// </summary>
+    public int IngestWorkers { get; set; } = 4;
+
+    /// <summary>Frames buffered per worker before the newest is dropped (the socket is never stalled).</summary>
+    public int IngestQueueCapacity { get; set; } = 1000;
+
+    /// <summary>Extra attempts for a frame whose commit failed (transient SQL error) before it is dropped.</summary>
+    public int IngestRetries { get; set; } = 2;
+
+    /// <summary>Base delay between those attempts (grows linearly: 1×, 2×, …).</summary>
+    public int IngestRetryDelayMs { get; set; } = 250;
+
     // === Live video capture ===
 
     public VideoOptions Video { get; set; } = new();

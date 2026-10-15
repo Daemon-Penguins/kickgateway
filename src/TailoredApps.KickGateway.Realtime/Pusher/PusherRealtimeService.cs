@@ -9,14 +9,16 @@ namespace TailoredApps.KickGateway.Realtime.Pusher;
 /// The listener core. On a timer it reads the managed roster and reconciles the set of Pusher
 /// channels (<c>chatrooms.{id}.v2</c> + <c>channel.{id}</c> per broadcaster) across one or more
 /// <see cref="PusherConnection"/>s (sharded by <see cref="RealtimeOptions.MaxChannelsPerConnection"/>).
-/// Each incoming app-event frame is mapped to a typed contract and recorded+published via the
-/// inbox+outbox.
+/// Each incoming app-event frame is handed to the <see cref="RealtimeIngestQueue"/>, whose workers map
+/// it to a typed contract and record+publish it via the inbox+outbox - the receive loops never wait
+/// on the database.
 /// </summary>
 public class PusherRealtimeService : BackgroundService
 {
     private readonly RosterProvider _roster;
     private readonly RealtimeFrameMapper _mapper;
     private readonly RealtimeIngestService _ingest;
+    private readonly RealtimeIngestQueue _queue;
     private readonly RealtimeOptions _opts;
     private readonly ILogger<PusherRealtimeService> _log;
     private readonly ILoggerFactory _loggerFactory;
@@ -36,12 +38,17 @@ public class PusherRealtimeService : BackgroundService
         _opts = opts.Value;
         _log = log;
         _loggerFactory = loggerFactory;
+        _queue = new RealtimeIngestQueue(_opts.IngestWorkers, _opts.IngestQueueCapacity, _opts.IngestRetries,
+            TimeSpan.FromMilliseconds(Math.Max(0, _opts.IngestRetryDelayMs)), IngestFrameAsync,
+            loggerFactory.CreateLogger("Realtime.Ingest"));
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _stopping = stoppingToken;
-        _log.LogInformation("Realtime listener starting (host {Host}, appKey {Key}…)", _opts.WsHost, Preview(_opts.AppKey));
+        _queue.Start();
+        _log.LogInformation("Realtime listener starting (host {Host}, appKey {Key}…; ingest {Workers} worker(s) × {Capacity} frames)",
+            _opts.WsHost, Preview(_opts.AppKey), _queue.Workers, _queue.Capacity);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -52,6 +59,8 @@ public class PusherRealtimeService : BackgroundService
         }
 
         foreach (var c in _connections) await c.DisposeAsync();
+        // Sockets are closed; commit what they handed over before the process goes away.
+        await _queue.DisposeAsync();
     }
 
     private async Task ReconcileAsync(CancellationToken ct)
@@ -104,20 +113,17 @@ public class PusherRealtimeService : BackgroundService
         return conn;
     }
 
-    private async Task OnAppEventAsync(PusherFrame frame)
+    // Runs on the connection's receive loop: hand off only, so the loop stays free to drain frames and
+    // answer Pusher's pings while the queue's workers do the mapping and the DB commit.
+    private Task OnAppEventAsync(PusherFrame frame)
     {
-        if (frame.Channel is null || !_channelMeta.TryGetValue(frame.Channel, out var meta)) return;
-        try
-        {
-            var evt = _mapper.Map(frame, meta, DateTime.UtcNow);
-            await _ingest.IngestAsync(evt, _stopping);
-        }
-        catch (OperationCanceledException) when (_stopping.IsCancellationRequested) { }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "Failed to ingest realtime frame {Event} on {Channel}", frame.Event, frame.Channel);
-        }
+        if (frame.Channel is null || !_channelMeta.TryGetValue(frame.Channel, out var meta)) return Task.CompletedTask;
+        _queue.TryEnqueue(frame, meta, DateTime.UtcNow);
+        return Task.CompletedTask;
     }
+
+    private Task<IngestOutcome> IngestFrameAsync(PusherFrame frame, ManagedChannel channel, DateTime receivedAt, CancellationToken ct)
+        => _ingest.IngestAsync(_mapper.Map(frame, channel, receivedAt), ct);
 
     private static string Preview(string key) => key.Length <= 6 ? key : key[..6];
 

@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Globalization;
 using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using TailoredApps.Integrations.Kick;
 using TailoredApps.KickGateway.Api.Data;
 using TailoredApps.KickGateway.Api.Webhooks;
+using TailoredApps.KickGateway.Telemetry;
 
 namespace TailoredApps.KickGateway.Api.Endpoints;
 
@@ -19,113 +21,141 @@ public static class WebhookEndpoints
             ILoggerFactory loggerFactory,
             CancellationToken ct) =>
         {
-            var log = loggerFactory.CreateLogger("KickWebhook");
-
-            http.Request.EnableBuffering();
-            string body;
-            using (var reader = new StreamReader(http.Request.Body, leaveOpen: true))
-                body = await reader.ReadToEndAsync(ct);
-            http.Request.Body.Position = 0;
-
-            var headers = http.Request.Headers;
-            var messageId = headers[KickEventTypes.HeaderMessageId].ToString();
-            var timestamp = headers[KickEventTypes.HeaderMessageTimestamp].ToString();
-            var signature = headers[KickEventTypes.HeaderSignature].ToString();
-            var subscriptionId = headers[KickEventTypes.HeaderSubscriptionId].ToString();
-            var eventType = headers[KickEventTypes.HeaderEventType].ToString();
-            var eventVersion = headers[KickEventTypes.HeaderEventVersion].ToString();
-
-            if (string.IsNullOrEmpty(messageId) || string.IsNullOrEmpty(timestamp) || string.IsNullOrEmpty(signature) || string.IsNullOrEmpty(eventType))
+            // Measured end to end as kickgateway.webhook.duration: Kick waits for the 2xx, and past its
+            // timeout it redelivers - a slow handler shows up here first, then as duplicates.
+            var started = Stopwatch.GetTimestamp();
+            var eventType = http.Request.Headers[KickEventTypes.HeaderEventType].ToString();
+            var outcome = KickGatewayMetrics.Outcomes.Error;
+            try
             {
-                log.LogWarning("Webhook missing required Kick-Event-* headers");
-                return Results.BadRequest("missing required Kick-Event headers");
+                var handled = await HandleAsync(http, verifier, db, dispatcher, loggerFactory.CreateLogger("KickWebhook"), ct);
+                outcome = handled.Outcome;
+                return handled.Result;
             }
-
-            var verified = await verifier.VerifyAsync(messageId, timestamp, body, signature, ct);
-            if (!verified)
+            finally
             {
-                log.LogWarning("Kick webhook signature verification failed (messageId={Mid})", messageId);
-                return Results.StatusCode(401);
+                KickGatewayMetrics.RecordWebhook(eventType, outcome, Stopwatch.GetElapsedTime(started));
             }
+        });
 
-            // Idempotency check: if we've already seen this message id, ack and skip.
-            // (Insert path also catches duplicate inserts via the PK constraint.)
-            var alreadySeen = await db.ReceivedWebhooks.AsNoTracking()
-                .AnyAsync(x => x.MessageId == messageId, ct);
-            if (alreadySeen)
-            {
-                log.LogInformation("Duplicate webhook {Mid} — already published, acking", messageId);
-                return Results.Ok();
-            }
+        return routes;
+    }
 
-            // Resolve the broadcaster the event is for. Kick puts the broadcaster
-            // user id inside the payload under a "broadcaster" object on most
-            // events, sometimes under different shapes. Pull it defensively.
-            var broadcasterUserId = TryExtractBroadcasterUserId(body);
-            var broadcaster = await db.Broadcasters
-                .Include(x => x.KickClientApp)
-                .FirstOrDefaultAsync(x => x.KickUserId == broadcasterUserId, ct);
+    private static async Task<(IResult Result, string Outcome)> HandleAsync(
+        HttpContext http,
+        IKickSignatureVerifier verifier,
+        KickGatewayDbContext db,
+        KickWebhookDispatcher dispatcher,
+        ILogger log,
+        CancellationToken ct)
+    {
+        http.Request.EnableBuffering();
+        string body;
+        using (var reader = new StreamReader(http.Request.Body, leaveOpen: true))
+            body = await reader.ReadToEndAsync(ct);
+        http.Request.Body.Position = 0;
 
-            var kickHeaders = SerializeKickHeaders(headers);
+        var headers = http.Request.Headers;
+        var messageId = headers[KickEventTypes.HeaderMessageId].ToString();
+        var timestamp = headers[KickEventTypes.HeaderMessageTimestamp].ToString();
+        var signature = headers[KickEventTypes.HeaderSignature].ToString();
+        var subscriptionId = headers[KickEventTypes.HeaderSubscriptionId].ToString();
+        var eventType = headers[KickEventTypes.HeaderEventType].ToString();
+        var eventVersion = headers[KickEventTypes.HeaderEventVersion].ToString();
 
-            if (broadcaster is null)
-            {
-                log.LogWarning("Received {Type} webhook for unknown broadcaster_user_id={Bid} (mid={Mid}) — recording and dropping",
-                    eventType, broadcasterUserId, messageId);
-                db.ReceivedWebhooks.Add(new ReceivedWebhook
-                {
-                    MessageId = messageId,
-                    EventType = eventType,
-                    SubscriptionId = subscriptionId,
-                    BroadcasterAccountId = null,
-                    ReceivedAt = DateTime.UtcNow,
-                    PublishedAt = null,
-                    RawBody = body,
-                    Headers = kickHeaders
-                });
-                await db.SaveChangesAsync(ct);
-                return Results.Ok();
-            }
+        if (string.IsNullOrEmpty(messageId) || string.IsNullOrEmpty(timestamp) || string.IsNullOrEmpty(signature) || string.IsNullOrEmpty(eventType))
+        {
+            log.LogWarning("Webhook missing required Kick-Event-* headers");
+            return (Results.BadRequest("missing required Kick-Event headers"), KickGatewayMetrics.Outcomes.Rejected);
+        }
 
-            DateTime? kickTs = DateTime.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed)
-                ? parsed
-                : null;
-            var receivedAt = DateTime.UtcNow;
+        var verified = await verifier.VerifyAsync(messageId, timestamp, body, signature, ct);
+        if (!verified)
+        {
+            log.LogWarning("Kick webhook signature verification failed (messageId={Mid})", messageId);
+            return (Results.StatusCode(401), KickGatewayMetrics.Outcomes.Unauthorized);
+        }
 
-            // Insert the inbox row + publish in a single transaction. MassTransit's
-            // EF outbox holds the published message until the transaction commits,
-            // so the row and the queued publish appear atomically.
-            await using var tx = await db.Database.BeginTransactionAsync(ct);
+        // Idempotency check: if we've already seen this message id, ack and skip.
+        // (Insert path also catches duplicate inserts via the PK constraint.)
+        var alreadySeen = await db.ReceivedWebhooks.AsNoTracking()
+            .AnyAsync(x => x.MessageId == messageId, ct);
+        if (alreadySeen)
+        {
+            log.LogInformation("Duplicate webhook {Mid} — already published, acking", messageId);
+            return (Results.Ok(), KickGatewayMetrics.Outcomes.Duplicate);
+        }
 
+        // Resolve the broadcaster the event is for. Kick puts the broadcaster
+        // user id inside the payload under a "broadcaster" object on most
+        // events, sometimes under different shapes. Pull it defensively.
+        // Only the account row is needed (id, Kick user id, slug) - no join on the client app.
+        var broadcasterUserId = TryExtractBroadcasterUserId(body);
+        var broadcaster = await db.Broadcasters
+            .FirstOrDefaultAsync(x => x.KickUserId == broadcasterUserId, ct);
+
+        var kickHeaders = SerializeKickHeaders(headers);
+
+        if (broadcaster is null)
+        {
+            log.LogWarning("Received {Type} webhook for unknown broadcaster_user_id={Bid} (mid={Mid}) — recording and dropping",
+                eventType, broadcasterUserId, messageId);
             db.ReceivedWebhooks.Add(new ReceivedWebhook
             {
                 MessageId = messageId,
                 EventType = eventType,
                 SubscriptionId = subscriptionId,
-                BroadcasterAccountId = broadcaster.Id,
-                ReceivedAt = receivedAt,
-                PublishedAt = receivedAt,
+                BroadcasterAccountId = null,
+                ReceivedAt = DateTime.UtcNow,
+                PublishedAt = null,
                 RawBody = body,
                 Headers = kickHeaders
             });
+            await db.SaveChangesAsync(ct);
+            return (Results.Ok(), KickGatewayMetrics.Outcomes.UnknownBroadcaster);
+        }
 
-            try
-            {
-                await dispatcher.PublishAsync(eventType, eventVersion, messageId, subscriptionId, kickTs, receivedAt, broadcaster, body, ct);
-                await db.SaveChangesAsync(ct);
-                await tx.CommitAsync(ct);
-            }
-            catch (DbUpdateException ex) when (IsUniqueViolation(ex))
-            {
-                // raced with another worker on the same delivery — duplicate is fine
-                await tx.RollbackAsync(ct);
-                log.LogInformation("Duplicate insert race on {Mid} — acking", messageId);
-            }
+        DateTime? kickTs = DateTime.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed)
+            ? parsed
+            : null;
+        var receivedAt = DateTime.UtcNow;
 
-            return Results.Ok();
+        // Insert the inbox row + publish in a single transaction. MassTransit's
+        // EF outbox holds the published message until the transaction commits,
+        // so the row and the queued publish appear atomically.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        db.ReceivedWebhooks.Add(new ReceivedWebhook
+        {
+            MessageId = messageId,
+            EventType = eventType,
+            SubscriptionId = subscriptionId,
+            BroadcasterAccountId = broadcaster.Id,
+            ReceivedAt = receivedAt,
+            PublishedAt = receivedAt,
+            RawBody = body,
+            Headers = kickHeaders
         });
 
-        return routes;
+        try
+        {
+            await dispatcher.PublishAsync(eventType, eventVersion, messageId, subscriptionId, kickTs, receivedAt, broadcaster, body, ct);
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex))
+        {
+            // raced with another worker on the same delivery — duplicate is fine
+            await tx.RollbackAsync(ct);
+            log.LogInformation("Duplicate insert race on {Mid} — acking", messageId);
+            return (Results.Ok(), KickGatewayMetrics.Outcomes.Duplicate);
+        }
+
+        // Kick's own delivery delay (its message timestamp vs. our clock). The gateway cannot shorten it,
+        // but a rising value explains "late" events that are not ours.
+        if (kickTs is { } ts) KickGatewayMetrics.RecordWebhookKickDelay(eventType, receivedAt - ts);
+
+        return (Results.Ok(), KickGatewayMetrics.Outcomes.Published);
     }
 
     private static string TryExtractBroadcasterUserId(string body)
