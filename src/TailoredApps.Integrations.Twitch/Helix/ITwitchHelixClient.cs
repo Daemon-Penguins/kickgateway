@@ -17,6 +17,19 @@ public sealed record TwitchStream(
     string Language,
     bool IsMature);
 
+/// <summary>One item of Helix <c>GET /videos</c>. <see cref="StreamId"/> links an archive (VOD) to the broadcast it recorded.</summary>
+public sealed record TwitchVideo(
+    string Id,
+    string StreamId,
+    string UserId,
+    string UserLogin,
+    string Title,
+    DateTime CreatedAt,
+    DateTime? PublishedAt,
+    string Url,
+    string Type,
+    string Duration);
+
 public sealed record EventSubSubscription(string Id, string Status, string Type, string Version, int Cost, string ConditionJson, string? SessionId, DateTime CreatedAt);
 
 /// <summary>Outcome of <c>POST /eventsub/subscriptions</c>. <see cref="TotalCost"/>/<see cref="MaxTotalCost"/> are Twitch's budget counters.</summary>
@@ -42,6 +55,13 @@ public interface ITwitchHelixClient
 
     /// <summary>Live streams among the given user ids (batched by 100; offline channels are absent from the result).</summary>
     Task<IReadOnlyList<TwitchStream>> GetStreamsAsync(string accessToken, IEnumerable<string> userIds, CancellationToken ct = default);
+
+    /// <summary>
+    /// The user's most recent videos (<c>GET /videos?user_id=</c>), newest first. <paramref name="type"/> is
+    /// Twitch's filter (<c>archive</c> = VODs of past and running broadcasts, <c>highlight</c>, <c>upload</c>,
+    /// <c>all</c>); <paramref name="first"/> caps the page (1-100).
+    /// </summary>
+    Task<IReadOnlyList<TwitchVideo>> GetVideosAsync(string accessToken, string userId, string type = "archive", int first = 5, CancellationToken ct = default);
 
     Task<EventSubCreateResult> CreateEventSubSubscriptionAsync(string accessToken, string type, string version,
         IReadOnlyDictionary<string, string> condition, string websocketSessionId, CancellationToken ct = default);

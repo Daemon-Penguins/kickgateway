@@ -29,6 +29,11 @@ public static class TwitchEventTopology
         Configure<TwitchChannelUpdated>(cfg);
 
         Configure<TwitchEventUnknown>(cfg);
+
+        // On-demand stream stats (request -> response), routed by login too - the Twitch counterpart of
+        // the Kick ChannelStatsRequested / ChannelStats pair.
+        ConfigureRouted<TwitchStreamStatsRequested>(cfg, m => m.BroadcasterLogin);
+        ConfigureRouted<TwitchStreamStats>(cfg, m => m.BroadcasterLogin);
     }
 
     /// <summary>
@@ -37,10 +42,22 @@ public static class TwitchEventTopology
     /// </summary>
     public static void BindTwitchEvent<TEvent>(IRabbitMqReceiveEndpointConfigurator endpoint, params string[] broadcasterLogins)
         where TEvent : class, ITwitchEvent
+        => BindRouted<TEvent>(endpoint, broadcasterLogins);
+
+    /// <summary>
+    /// Bind a receive endpoint to the <see cref="TwitchStreamStatsRequested"/> exchange - what the gateway's
+    /// Api does to answer stats requests. Subscribers normally use <c>IRequestClient&lt;TwitchStreamStatsRequested&gt;</c>
+    /// instead; binding the request type yourself is for a second responder.
+    /// </summary>
+    public static void BindTwitchStreamStatsRequests(IRabbitMqReceiveEndpointConfigurator endpoint, params string[] broadcasterLogins)
+        => BindRouted<TwitchStreamStatsRequested>(endpoint, broadcasterLogins);
+
+    private static void BindRouted<TMessage>(IRabbitMqReceiveEndpointConfigurator endpoint, string[] broadcasterLogins)
+        where TMessage : class
     {
         if (broadcasterLogins.Length == 0)
         {
-            endpoint.Bind<TEvent>(b =>
+            endpoint.Bind<TMessage>(b =>
             {
                 b.ExchangeType = "topic";
                 b.RoutingKey = AllChannels;
@@ -51,7 +68,7 @@ public static class TwitchEventTopology
         foreach (var login in broadcasterLogins)
         {
             var key = string.IsNullOrWhiteSpace(login) ? AllChannels : login.Trim().ToLowerInvariant();
-            endpoint.Bind<TEvent>(b =>
+            endpoint.Bind<TMessage>(b =>
             {
                 b.ExchangeType = "topic";
                 b.RoutingKey = key;
@@ -61,9 +78,13 @@ public static class TwitchEventTopology
 
     private static void Configure<T>(IRabbitMqBusFactoryConfigurator cfg)
         where T : class, ITwitchEvent
+        => ConfigureRouted<T>(cfg, m => m.BroadcasterLogin);
+
+    private static void ConfigureRouted<T>(IRabbitMqBusFactoryConfigurator cfg, Func<T, string?> routingKey)
+        where T : class
     {
         cfg.Publish<T>(p => p.ExchangeType = "topic");
         cfg.Send<T>(s => s.UseRoutingKeyFormatter(ctx =>
-            (ctx.Message.BroadcasterLogin ?? string.Empty).ToLowerInvariant()));
+            (routingKey(ctx.Message) ?? string.Empty).ToLowerInvariant()));
     }
 }

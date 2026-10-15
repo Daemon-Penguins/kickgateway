@@ -11,6 +11,7 @@ Twitch **login** (lowercase). Bind `#` for every channel or a login for one.
 | --- | --- | --- |
 | `Chat` | `TwitchChatMessage`, `TwitchChatNotification` (subs, gifts, raids, announcements...), `TwitchChatMessageDeleted`, `TwitchChatCleared`, `TwitchChatUserMessagesCleared`, `TwitchChatSettingsUpdated` | EventSub WebSocket (`channel.chat.*`) |
 | `Channel` | `TwitchStreamOnline`, `TwitchStreamOffline`, `TwitchChannelUpdated` | Helix `GET /streams` polling |
+| `Channel` | `TwitchStreamStatsRequested` → `TwitchStreamStats` (request/response: live state, viewers, title/category, the running broadcast's VOD) | Helix on demand, answered by the gateway's Api |
 | root | `TwitchEventUnknown` | any EventSub type without a typed contract |
 | `Media` | `TwitchAudioSegment` (ephemeral, short TTL), `TwitchLiveTranscript` | live HLS capture + Whisper |
 
