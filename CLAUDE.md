@@ -314,7 +314,11 @@ Status: actively developed.
   usher; `audio_only` rendition, MPEG-TS 2 s segments with `PROGRAM-DATE-TIME`), skips `twitch-stitched-ad`
   dateranges and bumps `DiscontinuitySequence` so the transcriber restarts ffmpeg; the transcriber is the
   same image with `Transcriber:Source=twitch` (`TwitchAudioSegment` in, `TwitchLiveTranscript` out, queue
-  `transcriber-twitch`). The Api stores Twitch transcripts in `LiveTranscripts` and projects the Twitch inbox
+  `transcriber-twitch`). Subscribers that sample viewers (kickstatistics) ask the Api for
+  `TwitchStreamStatsRequested` → `TwitchStreamStats` (request/response, login-routed like the Kick
+  `ChannelStats` pair; Helix users → streams → videos with the app token, the running broadcast's VOD
+  matched on `stream_id`, `?t=1h2m3s` seek syntax) - no subscriber touches Helix itself.
+  The Api stores Twitch transcripts in `LiveTranscripts` and projects the Twitch inbox
   into the same analytics tables - every such row carries `Platform` (`kick` / `twitch`, default `kick`),
   the dedupe key of a Twitch transcript is `twitch:` prefixed, and `/api/analytics/*` + the MCP tools take
   `platform` (default `kick` wherever a channel or chatter is named; slugs and numeric user ids are only

@@ -131,6 +131,7 @@ builder.Services.AddMassTransit(x =>
     x.AddConsumer<LiveTranscriptTranslationConsumer>();
     x.AddConsumer<TwitchLiveTranscriptConsumer>();
     x.AddConsumer<TwitchLiveFeedConsumer>();
+    x.AddConsumer<TwitchStreamStatsConsumer>();
 
     x.UsingRabbitMq((ctx, cfg) =>
     {
@@ -225,6 +226,14 @@ builder.Services.AddMassTransit(x =>
             UseDbRetry(e);
             TwitchMediaTopology.BindTranscript(e);
             e.ConfigureConsumer<TwitchLiveTranscriptConsumer>(ctx);
+        });
+
+        // On-demand Twitch stream stats (Helix with the app token): the Twitch counterpart of the
+        // channel-stats queue above - shared, durable, bound to every login, one answer per request.
+        cfg.ReceiveEndpoint("kickgateway-twitch-stream-stats", e =>
+        {
+            TwitchEventTopology.BindTwitchStreamStatsRequests(e);
+            e.ConfigureConsumer<TwitchStreamStatsConsumer>(ctx);
         });
 
         // Twitch live-feed tap (per replica, auto-delete): end-to-end delivery lag for every Twitch contract.

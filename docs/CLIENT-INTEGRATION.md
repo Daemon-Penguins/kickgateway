@@ -261,6 +261,7 @@ Kick families, so a Twitch login equal to a Kick slug cannot collide.
 |---|---|---|
 | `TailoredApps.TwitchGateway.Contracts.Chat` | `TwitchChatMessage` (text, fragments with emotes/mentions/cheermotes, badges, reply, cheer bits, shared-chat source), `TwitchChatNotification` (`NoticeType` + typed `Sub` / `Resub` / `SubGift` / `CommunitySubGift` / `Raid` / `Announcement` / `BitsBadgeTier` / `CharityDonation` / `WatchStreak` ...), `TwitchChatMessageDeleted`, `TwitchChatCleared`, `TwitchChatUserMessagesCleared`, `TwitchChatSettingsUpdated` | `TwitchEventTopology.BindTwitchEvent<T>(e, "login")` |
 | `TailoredApps.TwitchGateway.Contracts.Channel` | `TwitchStreamOnline`, `TwitchStreamOffline`, `TwitchChannelUpdated` (from Helix polling, ~30 s resolution) | same |
+| `TailoredApps.TwitchGateway.Contracts.Channel` | `TwitchStreamStatsRequested` → `TwitchStreamStats` (request/response: live state, viewer count, title/category, the running broadcast's VOD `LiveVodUrl` + `LiveVodStartedAt`; the Twitch counterpart of `ChannelStatsRequested`) | `IRequestClient<TwitchStreamStatsRequested>` |
 | `TailoredApps.TwitchGateway.Contracts` | `TwitchEventUnknown` (any EventSub type without a typed contract) | same |
 | `TailoredApps.TwitchGateway.Contracts.Media` | `TwitchAudioSegment` (ephemeral, short TTL, `audio_only` MPEG-TS with `ProgramDateTime`), `TwitchLiveTranscript` | `TwitchMediaTopology.BindAudio` / `BindTranscript` |
 
@@ -281,6 +282,17 @@ cfg.ReceiveEndpoint("myapp-twitch-chat", e =>
     e.ConfigureConsumer<MyTwitchChatConsumer>(ctx);
 });
 ```
+
+```csharp
+// Viewer sampling / live check without touching Helix yourself: the gateway answers with its app token.
+x.AddRequestClient<TwitchStreamStatsRequested>();
+...
+var response = await client.GetResponse<TwitchStreamStats>(
+    new TwitchStreamStatsRequested { BroadcasterLogin = "forsen" }, ct, RequestTimeout.After(s: 30));
+// response.Message.Success / IsLive / ViewerCount / StreamId / LiveVodUrl ...
+```
+
+Seek links into a Twitch VOD use `?t=1h2m3s` (`TwitchWatchUrls.SeekParameter(seconds)`), not plain seconds.
 
 ```xml
 <PackageReference Include="TailoredApps.TwitchGateway.Contracts" Version="0.1.*" />

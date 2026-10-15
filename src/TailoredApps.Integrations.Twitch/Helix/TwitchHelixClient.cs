@@ -57,6 +57,22 @@ public sealed class TwitchHelixClient : ITwitchHelixClient
         return result;
     }
 
+    public async Task<IReadOnlyList<TwitchVideo>> GetVideosAsync(string accessToken, string userId, string type = "archive", int first = 5, CancellationToken ct = default)
+    {
+        var result = new List<TwitchVideo>();
+        if (string.IsNullOrWhiteSpace(userId)) return result;
+        var query = $"user_id={Uri.EscapeDataString(userId.Trim())}&type={Uri.EscapeDataString(type)}&first={Math.Clamp(first, 1, 100)}";
+        using var doc = await GetAsync(accessToken, "videos?" + query, ct);
+        if (doc is null) return result;
+        foreach (var v in Data(doc))
+        {
+            result.Add(new TwitchVideo(
+                Str(v, "id"), Str(v, "stream_id"), Str(v, "user_id"), Str(v, "user_login"), Str(v, "title"),
+                Date(v, "created_at") ?? DateTime.UtcNow, Date(v, "published_at"), Str(v, "url"), Str(v, "type"), Str(v, "duration")));
+        }
+        return result;
+    }
+
     public async Task<EventSubCreateResult> CreateEventSubSubscriptionAsync(string accessToken, string type, string version,
         IReadOnlyDictionary<string, string> condition, string websocketSessionId, CancellationToken ct = default)
     {
