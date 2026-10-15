@@ -9,17 +9,27 @@
 # Re-run after `git pull` to publish the new build and restart the agent.
 # Uninstall: launchctl bootout gui/$(id -u)/com.tailoredapps.kickgateway.transcriber && rm ~/Library/LaunchAgents/com.tailoredapps.kickgateway.transcriber.plist
 #
+# A second agent next to the default one, e.g. the Twitch transcriber:
+#   TRANSCRIBER_INSTANCE=twitch deploy/macos/install-transcriber.sh
+# suffixes the label (com.tailoredapps.kickgateway.transcriber-twitch), the app dir, the env file
+# (~/.config/kickgateway/transcriber-twitch.env) and the log, and defaults Transcriber__Source to the
+# instance name (the env file may override it). Both agents share the Whisper model cache and the GPU.
+#
 # A LaunchAgent needs a logged-in user session: on a headless Mac mini enable automatic login
 # (System Settings > Users & Groups) and keep it awake (`sudo pmset -a sleep 0 disksleep 0`).
 set -euo pipefail
 
-LABEL="com.tailoredapps.kickgateway.transcriber"
+INSTANCE="${TRANSCRIBER_INSTANCE:-}"
+case "$INSTANCE" in *[!a-z0-9-]*) echo "TRANSCRIBER_INSTANCE may only contain a-z, 0-9 and '-'"; exit 1;; esac
+SUFFIX="${INSTANCE:+-$INSTANCE}"
+LABEL="com.tailoredapps.kickgateway.transcriber$SUFFIX"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROJECT="$REPO_ROOT/src/TailoredApps.KickGateway.Subscribers.Transcriber"
-APP_DIR="$HOME/Library/Application Support/kickgateway/transcriber"
-ENV_FILE="${TRANSCRIBER_ENV_FILE:-$HOME/.config/kickgateway/transcriber.env}"
+APP_DIR="$HOME/Library/Application Support/kickgateway/transcriber$SUFFIX"
+ENV_FILE="${TRANSCRIBER_ENV_FILE:-$HOME/.config/kickgateway/transcriber$SUFFIX.env}"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG_DIR="$HOME/Library/Logs/kickgateway"
+LOG_FILE="$LOG_DIR/transcriber$SUFFIX.log"
 
 if [ "$(uname -s)" != "Darwin" ]; then echo "This installer is for macOS."; exit 1; fi
 
@@ -56,6 +66,7 @@ put_env HOME "$HOME"
 put_env DOTNET_ENVIRONMENT "Production"
 put_env DOTNET_CLI_TELEMETRY_OPTOUT "1"
 put_env Transcriber__FfmpegPath "$FFMPEG"
+if [ -n "$INSTANCE" ]; then put_env Transcriber__Source "$INSTANCE"; fi
 while IFS= read -r line || [ -n "$line" ]; do
   line="${line%%#*}"
   line="${line#"${line%%[![:space:]]*}"}"
@@ -94,9 +105,9 @@ $ENV_XML  </dict>
   <key>ThrottleInterval</key>
   <integer>15</integer>
   <key>StandardOutPath</key>
-  <string>$(xml_escape "$LOG_DIR/transcriber.log")</string>
+  <string>$(xml_escape "$LOG_FILE")</string>
   <key>StandardErrorPath</key>
-  <string>$(xml_escape "$LOG_DIR/transcriber.log")</string>
+  <string>$(xml_escape "$LOG_FILE")</string>
 </dict>
 </plist>
 PLIST_EOF
@@ -110,7 +121,7 @@ launchctl kickstart -k "gui/$UID_NUM/$LABEL"
 
 echo
 echo "Installed and started '$LABEL'."
-echo "  log:     $LOG_DIR/transcriber.log   (tail -f it; look for 'Transcriber online' and the per-chunk timings)"
+echo "  log:     $LOG_FILE   (tail -f it; look for 'Transcriber online' and the per-chunk timings)"
 echo "  env:     $ENV_FILE"
 echo "  status:  launchctl print gui/$UID_NUM/$LABEL | head -20"
 echo "  stop:    launchctl bootout gui/$UID_NUM/$LABEL"
