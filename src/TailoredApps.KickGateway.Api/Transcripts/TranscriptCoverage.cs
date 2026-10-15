@@ -18,6 +18,7 @@ public sealed record TranscriptWindowCoverage(
 /// <summary>One channel's transcript coverage for <c>/status</c>: all-time extent, freshness, and the last 24 h in detail.</summary>
 public sealed record TranscriptChannelCoverage(
     string Channel,
+    string Platform,
     long Slices,
     DateTime FirstStartedAt,
     DateTime LastStartedAt,
@@ -41,12 +42,13 @@ public static class TranscriptCoverageQueries
     public static async Task<TranscriptCoverage> StatusAsync(KickGatewayDbContext db, AnalyticsScope scope, DateTime now, CancellationToken ct)
     {
         IQueryable<LiveTranscriptRecord> q = db.LiveTranscripts.AsNoTracking();
+        if (scope.Platform is { } platform) q = q.Where(x => x.Platform == platform);
         if (scope.Slugs is { } slugs) q = q.Where(x => slugs.Contains(x.ChannelSlug));
 
         var perChannel = await q
-            .GroupBy(x => x.ChannelSlug)
-            .Select(g => new { Slug = g.Key, Slices = g.LongCount(), First = g.Min(x => x.StartedAt), Last = g.Max(x => x.StartedAt) })
-            .OrderBy(x => x.Slug)
+            .GroupBy(x => new { x.Platform, x.ChannelSlug })
+            .Select(g => new { g.Key.Platform, Slug = g.Key.ChannelSlug, Slices = g.LongCount(), First = g.Min(x => x.StartedAt), Last = g.Max(x => x.StartedAt) })
+            .OrderBy(x => x.Platform).ThenBy(x => x.Slug)
             .ToListAsync(ct);
 
         var recent = new AnalyticsWindow(now - RecentSpan, now);
@@ -54,21 +56,21 @@ public static class TranscriptCoverageQueries
         foreach (var c in perChannel)
         {
             var newest = await db.LiveTranscripts.AsNoTracking()
-                .Where(x => x.ChannelSlug == c.Slug)
+                .Where(x => x.Platform == c.Platform && x.ChannelSlug == c.Slug)
                 .OrderByDescending(x => x.StartedAt).ThenByDescending(x => x.Id)
                 .Select(x => new { x.EndedAt, x.ReceivedAt })
                 .FirstAsync(ct);
             channels.Add(new TranscriptChannelCoverage(
-                c.Slug, c.Slices, c.First, c.Last, newest.EndedAt, newest.ReceivedAt,
+                c.Slug, c.Platform, c.Slices, c.First, c.Last, newest.EndedAt, newest.ReceivedAt,
                 Math.Round((newest.ReceivedAt - newest.EndedAt).TotalSeconds, 1),
-                await WindowAsync(db, c.Slug, recent, ct)));
+                await WindowAsync(db, c.Platform, c.Slug, recent, ct)));
         }
         return new TranscriptCoverage(perChannel.Sum(c => c.Slices), channels);
     }
 
-    public static async Task<TranscriptWindowCoverage> WindowAsync(KickGatewayDbContext db, string channel, AnalyticsWindow window, CancellationToken ct)
+    public static async Task<TranscriptWindowCoverage> WindowAsync(KickGatewayDbContext db, string platform, string channel, AnalyticsWindow window, CancellationToken ct)
     {
-        IQueryable<LiveTranscriptRecord> q = db.LiveTranscripts.AsNoTracking().Where(x => x.ChannelSlug == channel && x.StartedAt < window.To);
+        IQueryable<LiveTranscriptRecord> q = db.LiveTranscripts.AsNoTracking().Where(x => x.Platform == platform && x.ChannelSlug == channel && x.StartedAt < window.To);
         if (window.From is { } from) q = q.Where(x => x.StartedAt >= from);
 
         var rows = await q

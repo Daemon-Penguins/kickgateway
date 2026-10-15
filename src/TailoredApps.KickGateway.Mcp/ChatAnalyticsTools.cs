@@ -12,24 +12,29 @@ public sealed class ChatAnalyticsTools(GatewayClient gateway)
 {
     private const string FromDoc = "Start of the time window (UTC): ISO-8601 like 2026-09-01 or 2026-09-01T18:00:00Z, a look-back like 30m/12h/7d/4w, or 'all'.";
     private const string ToDoc = "End of the time window (UTC), same formats as 'from'. Default: now.";
-    private const string ChannelDoc = "Kick channel slug (lowercase, as in kick.com/<slug>).";
-    private const string UserDoc = "Kick user id (digits) or username (current or former, with or without @).";
+    private const string ChannelDoc = "Channel: Kick slug (as in kick.com/<slug>) or Twitch login (twitch.tv/<login>), lowercase - say which with 'platform'.";
+    private const string UserDoc = "User id (digits) or username (current or former, with or without @) on the platform given by 'platform'.";
+    private const string PlatformDoc = "Platform the channel/chatter belongs to: 'kick' (default) or 'twitch'. Slugs and user ids are only unique per platform.";
+    private const string PlatformAllDoc = "Optional platform filter: 'kick' or 'twitch'. Default: both platforms (each row says which).";
 
     [McpServerTool(Name = "analytics_status", Title = "Analytics status", ReadOnly = true, Idempotent = true, OpenWorld = false)]
-    [Description("How fresh and how big the chat dataset is: projection lag per source (webhooks, realtime), message/event counts, " +
+    [Description("How fresh and how big the chat dataset is: projection lag per source (webhooks, realtime, twitch), message/event counts, " +
                  "oldest/newest message, the channels you may query, and 'transcripts' = speech-to-text coverage per channel (slices, " +
                  "first/last slice, pipeline delay, last 24 h with speech seconds and languages). Call first when results look empty " +
                  "or stale, and before concluding a streamer 'never said' something - no coverage means no speech data, not silence.")]
-    public Task<string> Status(CancellationToken ct) =>
-        gateway.GetAsync("/api/analytics/status", null, ct);
+    public Task<string> Status(
+        [Description(PlatformAllDoc)] string? platform = null,
+        CancellationToken ct = default) =>
+        gateway.GetAsync("/api/analytics/status", Q(("platform", platform)), ct);
 
     [McpServerTool(Name = "list_channels", Title = "List channels", ReadOnly = true, Idempotent = true, OpenWorld = false)]
-    [Description("Channels with chat in the window, busiest first: message count, distinct chatters, first/last message. Default window: last 30 days.")]
+    [Description("Channels with chat in the window, busiest first: platform, message count, distinct chatters, first/last message. Default window: last 30 days.")]
     public Task<string> ListChannels(
         [Description(FromDoc)] string? from = null,
         [Description(ToDoc)] string? to = null,
+        [Description(PlatformAllDoc)] string? platform = null,
         CancellationToken ct = default) =>
-        gateway.GetAsync("/api/analytics/channels", Q(("from", from), ("to", to)), ct);
+        gateway.GetAsync("/api/analytics/channels", Q(("from", from), ("to", to), ("platform", platform)), ct);
 
     [McpServerTool(Name = "channel_overview", Title = "Channel overview", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("Community snapshot of one channel: messages, chatters, new vs returning chatters, share of replies/@mentions, " +
@@ -39,8 +44,9 @@ public sealed class ChatAnalyticsTools(GatewayClient gateway)
         [Description(ChannelDoc)] string channel,
         [Description(FromDoc)] string? from = null,
         [Description(ToDoc)] string? to = null,
+        [Description(PlatformDoc)] string? platform = null,
         CancellationToken ct = default) =>
-        gateway.GetAsync($"/api/analytics/channels/{Seg(channel)}/overview", Q(("from", from), ("to", to)), ct);
+        gateway.GetAsync($"/api/analytics/channels/{Seg(channel)}/overview", Q(("from", from), ("to", to), ("platform", platform)), ct);
 
     [McpServerTool(Name = "list_chatters", Title = "List chatters", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("Paged chatter list for a channel with per-chatter messages, active days, replies sent/received, @mentions received, " +
@@ -52,9 +58,10 @@ public sealed class ChatAnalyticsTools(GatewayClient gateway)
         [Description("Order: messages (default), active_days, replies, last_seen, first_seen.")] string? sort = null,
         [Description("Page size, 1-200 (default 50).")] int? limit = null,
         [Description("Rows to skip for paging (default 0).")] int? offset = null,
+        [Description(PlatformDoc)] string? platform = null,
         CancellationToken ct = default) =>
         gateway.GetAsync($"/api/analytics/channels/{Seg(channel)}/chatters",
-            Q(("from", from), ("to", to), ("sort", sort), ("limit", limit), ("offset", offset)), ct);
+            Q(("from", from), ("to", to), ("sort", sort), ("limit", limit), ("offset", offset), ("platform", platform)), ct);
 
     [McpServerTool(Name = "interaction_graph", Title = "Chatter interaction graph", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("Who talks to whom in a channel. Directed weighted edges from Kick replies, @mentions, gifted subs and (in slow chat only) " +
@@ -67,9 +74,10 @@ public sealed class ChatAnalyticsTools(GatewayClient gateway)
         [Description("Max chatters returned, strongest first (default 40).")] int? maxNodes = null,
         [Description("Max edges returned among those chatters, heaviest first (default 100).")] int? maxEdges = null,
         [Description("Include the implicit proximity signal (default true). Set false to see explicit interactions only.")] bool? includeProximity = null,
+        [Description(PlatformDoc)] string? platform = null,
         CancellationToken ct = default) =>
         gateway.GetAsync($"/api/analytics/channels/{Seg(channel)}/interactions",
-            Q(("from", from), ("to", to), ("maxNodes", maxNodes ?? 40), ("maxEdges", maxEdges ?? 100), ("proximity", includeProximity)), ct);
+            Q(("from", from), ("to", to), ("maxNodes", maxNodes ?? 40), ("maxEdges", maxEdges ?? 100), ("proximity", includeProximity), ("platform", platform)), ct);
 
     [McpServerTool(Name = "find_chatters", Title = "Find chatters", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("Find chatters by (part of) username or exact user id. Exact and prefix matches first.")]
@@ -77,8 +85,9 @@ public sealed class ChatAnalyticsTools(GatewayClient gateway)
         [Description("Username fragment (min 2 chars) or user id.")] string query,
         [Description("Optional channel slug to search within.")] string? channel = null,
         [Description("Max results, 1-50 (default 20).")] int? limit = null,
+        [Description(PlatformDoc)] string? platform = null,
         CancellationToken ct = default) =>
-        gateway.GetAsync("/api/analytics/chatters", Q(("q", query), ("channel", channel), ("limit", limit)), ct);
+        gateway.GetAsync("/api/analytics/chatters", Q(("q", query), ("channel", channel), ("limit", limit), ("platform", platform)), ct);
 
     [McpServerTool(Name = "chatter_profile", Title = "Chatter profile", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("Personal profile of one chatter: known usernames, activity (first/last seen, active days, sessions, UTC hour and weekday " +
@@ -91,8 +100,9 @@ public sealed class ChatAnalyticsTools(GatewayClient gateway)
         [Description("Optional channel slug to restrict the profile to.")] string? channel = null,
         [Description(FromDoc + " Default: all history.")] string? from = null,
         [Description(ToDoc)] string? to = null,
+        [Description(PlatformDoc)] string? platform = null,
         CancellationToken ct = default) =>
-        gateway.GetAsync($"/api/analytics/chatters/{Seg(user)}", Q(("channel", channel), ("from", from), ("to", to)), ct);
+        gateway.GetAsync($"/api/analytics/chatters/{Seg(user)}", Q(("channel", channel), ("from", from), ("to", to), ("platform", platform)), ct);
 
     [McpServerTool(Name = "chatter_relationship", Title = "Relationship between two chatters", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("Dynamics between two chatters: replies, @mentions and gifted subs in each direction with weights, balance " +
@@ -104,9 +114,10 @@ public sealed class ChatAnalyticsTools(GatewayClient gateway)
         [Description("Optional channel slug to restrict to.")] string? channel = null,
         [Description(FromDoc + " Default: all history.")] string? from = null,
         [Description(ToDoc)] string? to = null,
+        [Description(PlatformDoc)] string? platform = null,
         CancellationToken ct = default) =>
         gateway.GetAsync($"/api/analytics/chatters/{Seg(user)}/relationships/{Seg(otherUser)}",
-            Q(("channel", channel), ("from", from), ("to", to)), ct);
+            Q(("channel", channel), ("from", from), ("to", to), ("platform", platform)), ct);
 
     [McpServerTool(Name = "search_messages", Title = "Search / read chat messages", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("Chat messages newest first, filtered by channel and/or user and optional text (substring). Use it to read what someone " +
@@ -120,9 +131,10 @@ public sealed class ChatAnalyticsTools(GatewayClient gateway)
         [Description(ToDoc)] string? to = null,
         [Description("Page size, 1-200 (default 50).")] int? limit = null,
         [Description("nextCursor from a previous page.")] string? cursor = null,
+        [Description(PlatformDoc)] string? platform = null,
         CancellationToken ct = default) =>
         gateway.GetAsync("/api/analytics/messages",
-            Q(("channel", channel), ("user", user), ("q", text), ("from", from), ("to", to), ("limit", limit), ("cursor", cursor)), ct);
+            Q(("channel", channel), ("user", user), ("q", text), ("from", from), ("to", to), ("limit", limit), ("cursor", cursor), ("platform", platform)), ct);
 
     [McpServerTool(Name = "message_context", Title = "Conversation around a message", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("The conversation around one message: the reply chain it answers (oldest first), the replies it received, and the " +
@@ -131,8 +143,9 @@ public sealed class ChatAnalyticsTools(GatewayClient gateway)
         [Description("Kick chat message id (from any message listing).")] string messageId,
         [Description("Channel messages to include before it, 0-100 (default 15).")] int? before = null,
         [Description("Channel messages to include after it, 0-100 (default 15).")] int? after = null,
+        [Description(PlatformDoc)] string? platform = null,
         CancellationToken ct = default) =>
-        gateway.GetAsync($"/api/analytics/messages/{Seg(messageId)}/context", Q(("before", before), ("after", after)), ct);
+        gateway.GetAsync($"/api/analytics/messages/{Seg(messageId)}/context", Q(("before", before), ("after", after), ("platform", platform)), ct);
 
     // ---- live speech-to-text (what the STREAM said, as opposed to what chat wrote) ----
 
@@ -154,10 +167,11 @@ public sealed class ChatAnalyticsTools(GatewayClient gateway)
         [Description("Page size, 1-500 (default 50).")] int? limit = null,
         [Description("nextCursor from a previous page.")] string? cursor = null,
         [Description("Include per-segment timings (default false - several times the payload).")] bool? includeSegments = null,
+        [Description(PlatformDoc)] string? platform = null,
         CancellationToken ct = default) =>
         gateway.GetAsync($"/api/analytics/channels/{Seg(channel)}/transcripts",
             Q(("q", text), ("language", language), ("from", from), ("to", to), ("limit", limit ?? 50), ("cursor", cursor),
-              ("segments", includeSegments == true)), ct);
+              ("segments", includeSegments == true), ("platform", platform)), ct);
 
     [McpServerTool(Name = "transcript_at", Title = "What was being said at a moment", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("The transcript slices overlapping one moment (+/- tolerance seconds), e.g. the createdAt of a chat message, to see " +
@@ -168,9 +182,10 @@ public sealed class ChatAnalyticsTools(GatewayClient gateway)
         [Description("The moment, ISO-8601 UTC (e.g. 2026-10-11T20:15:30Z).")] string at,
         [Description("Seconds either side of 'at', 0-300 (default 20).")] double? toleranceSeconds = null,
         [Description("Include per-segment timings (default false).")] bool? includeSegments = null,
+        [Description(PlatformDoc)] string? platform = null,
         CancellationToken ct = default) =>
         gateway.GetAsync($"/api/analytics/channels/{Seg(channel)}/transcripts/at",
-            Q(("at", at), ("tolerance", toleranceSeconds), ("segments", includeSegments == true)), ct);
+            Q(("at", at), ("tolerance", toleranceSeconds), ("segments", includeSegments == true), ("platform", platform)), ct);
 
     [McpServerTool(Name = "speech_reactions", Title = "How chat reacted to one sentence", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("What chat wrote right after ONE transcript slice (its 'id' from search_transcripts, transcript_at or a speech item of " +
@@ -184,9 +199,10 @@ public sealed class ChatAnalyticsTools(GatewayClient gateway)
         [Description("Window start, seconds after the slice's endedAt, 0-600 (default 5).")] double? lagMinSeconds = null,
         [Description("Window end, seconds after the slice's endedAt, 0-600 (default 45).")] double? lagMaxSeconds = null,
         [Description("Max messages to return, 1-500 (default 100); 'stats' always count the whole window.")] int? limit = null,
+        [Description(PlatformDoc)] string? platform = null,
         CancellationToken ct = default) =>
         gateway.GetAsync($"/api/analytics/channels/{Seg(channel)}/transcripts/{sliceId}/reactions",
-            Q(("lagMin", lagMinSeconds), ("lagMax", lagMaxSeconds), ("limit", limit ?? 100)), ct);
+            Q(("lagMin", lagMinSeconds), ("lagMax", lagMaxSeconds), ("limit", limit ?? 100), ("platform", platform)), ct);
 
     [McpServerTool(Name = "stream_timeline", Title = "Channel timeline: speech + chat + events", ReadOnly = true, Idempotent = true, OpenWorld = false)]
     [Description("One chronology of a channel, oldest first: what the stream SAID (kind 'speech'), what HAPPENED (kind 'event': " +
@@ -206,10 +222,11 @@ public sealed class ChatAnalyticsTools(GatewayClient gateway)
         [Description("Drop speech below this confidence, 0..1 (default 0).")] double? minConfidence = null,
         [Description("Page size, 1-500 (default 100).")] int? limit = null,
         [Description("nextCursor from a previous page.")] string? cursor = null,
+        [Description(PlatformDoc)] string? platform = null,
         CancellationToken ct = default) =>
         gateway.GetAsync($"/api/analytics/channels/{Seg(channel)}/timeline",
             Q(("from", from), ("to", to), ("at", at), ("before", beforeSeconds), ("after", afterSeconds), ("include", include),
-              ("minConfidence", minConfidence), ("limit", limit ?? 100), ("cursor", cursor)), ct);
+              ("minConfidence", minConfidence), ("limit", limit ?? 100), ("cursor", cursor), ("platform", platform)), ct);
 
     private static string Seg(string value) => Uri.EscapeDataString(value.Trim());
 

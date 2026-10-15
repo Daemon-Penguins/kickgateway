@@ -87,18 +87,34 @@ Prod: set the `ANALYTICS_API_KEY` repo secret (see README → Deploy). Dev: run
   every other admin endpoint ignores it. A request carrying a key is judged by
   the key alone, so a wrong key returns 401 instead of a login redirect.
 - A channel or chatter outside the caller's scope returns 404.
+- Non-SuperAdmin scopes are built from Kick broadcasters, so **Twitch** channels
+  are visible to SuperAdmins and the API key only.
+
+## Platforms
+
+The read model holds Kick and Twitch rows side by side; every row carries
+`platform` (`kick` or `twitch`). Channel slugs/logins and numeric user ids are
+only unique **within** a platform, so every endpoint that names a channel or a
+chatter takes `platform` and defaults it to `kick` (backward compatible).
+`/status` and `/channels` cover both platforms unless `platform` narrows them;
+each channel row says which it is. Twitch rows map onto the same shapes: a
+cheer (bits) is a `kicks_gift` event (`amount` = bits), `clear_user_messages`
+(Twitch's chat-side view of a ban or timeout) is a `timeout`, sub notices are
+`subscription_new` / `subscription_renewal` / `subscription_gift` with the tier
+in `detail`.
 
 ## Endpoints
 
 All `GET`, JSON camelCase, nulls omitted, all times UTC (`…Z`). `from`/`to`
 accept ISO-8601 (`2026-09-01`, `2026-09-01T18:00:00Z`, no offset = UTC),
 look-backs (`30m`, `12h`, `7d`, `4w`), or `from=all`. A response `window`
-without `from` means "since the beginning".
+without `from` means "since the beginning". `platform=kick|twitch` applies to
+every endpoint below (see Platforms).
 
 | Endpoint | Default window | Returns |
 | --- | --- | --- |
-| `/api/analytics/status` | – | Projection lag per source, row counts, oldest/newest message, channels in scope, `transcripts` = speech-to-text coverage per channel (below) |
-| `/api/analytics/channels` | 30 d | Channels with chat: messages, chatters, first/last |
+| `/api/analytics/status` | – | Projection lag per source (`webhooks`, `realtime`, `twitch`), row counts, oldest/newest message, channels in scope, `transcripts` = speech-to-text coverage per channel (below) |
+| `/api/analytics/channels` | 30 d | Channels with chat: platform, messages, chatters, first/last |
 | `/api/analytics/channels/{slug}/overview` | 7 d | Messages, chatters, new vs returning, reply/mention share, per-hour + per-day activity, top 15 chatters, event totals, `transcripts` (speech in the window, when any) |
 | `/api/analytics/channels/{slug}/chatters?sort=&limit=&offset=` | 7 d | Paged chatters; `sort` = `messages` / `active_days` / `replies` / `last_seen` / `first_seen` |
 | `/api/analytics/channels/{slug}/interactions?maxNodes=&maxEdges=&proximity=&replyWeight=&mentionWeight=&giftWeight=&proximityWeight=` | 7 d | Interaction graph (below) |

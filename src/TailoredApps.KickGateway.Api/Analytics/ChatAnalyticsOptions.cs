@@ -36,6 +36,9 @@ public sealed class ChatAnalyticsOptions
         /// message deletions and unbans. Webhooks alone when false.</summary>
         public bool IncludeRealtime { get; set; } = true;
 
+        /// <summary>Also project <c>ReceivedTwitchEvents</c> (EventSub chat + Helix state) with <c>Platform = twitch</c>.</summary>
+        public bool IncludeTwitch { get; set; } = true;
+
         /// <summary>Inbox rows read per batch.</summary>
         public int BatchSize { get; set; } = 500;
 

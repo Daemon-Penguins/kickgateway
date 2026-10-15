@@ -4,12 +4,14 @@ using TailoredApps.KickGateway.Subscribers.Transcriber;
 using TailoredApps.KickGateway.Subscribers.Transcriber.Consumers;
 using TailoredApps.KickGateway.Subscribers.Transcriber.Sinks;
 using TailoredApps.KickGateway.Subscribers.Transcriber.Whisper;
+using TailoredApps.TwitchGateway.Contracts.Media;
 
-// Live-stream transcriber: consumes the LiveVideoSegment firehose, pipes each channel's segments
-// through a long-lived ffmpeg (audio only → 16 kHz mono PCM), cuts the audio on pauses into
-// ~15 s chunks and runs them through Whisper (whisper.cpp via Whisper.net, GPU when available).
-// Every chunk's text is published as Contracts.Realtime.Media.LiveTranscript on its own
-// slug-routed topic exchange and appended to per-channel daily .txt/.jsonl files.
+// Live-stream transcriber: consumes one platform's live-audio firehose (Transcriber:Source = kick ->
+// LiveVideoSegment, twitch -> TwitchAudioSegment), pipes each channel's segments through a long-lived
+// ffmpeg (audio only → 16 kHz mono PCM), cuts the audio on pauses into ~15 s chunks and runs them through
+// Whisper (whisper.cpp via Whisper.net, GPU when available). Every chunk's text is published as
+// LiveTranscript (Kick) or TwitchLiveTranscript (Twitch) on its own channel-routed topic exchange and
+// appended to per-channel daily .txt/.jsonl files.
 
 var builder = Host.CreateApplicationBuilder(args);
 
@@ -42,7 +44,8 @@ if (opts.PublishToBus)
 
 builder.Services.AddMassTransit(x =>
 {
-    x.AddConsumer<LiveVideoSegmentConsumer>();
+    if (opts.IsTwitch) x.AddConsumer<TwitchAudioSegmentConsumer>();
+    else x.AddConsumer<LiveVideoSegmentConsumer>();
 
     x.UsingRabbitMq((ctx, cfg) =>
     {
@@ -53,10 +56,11 @@ builder.Services.AddMassTransit(x =>
             h.Password(rmq["Password"] ?? "guest");
         });
 
-        // Declares both media exchanges (video in, transcripts out) with slug routing.
-        KickMediaTopology.ConfigurePublishTopology(cfg);
+        // Declares the platform's media exchanges (audio in, transcripts out) with channel routing.
+        if (opts.IsTwitch) TwitchMediaTopology.ConfigurePublishTopology(cfg);
+        else KickMediaTopology.ConfigurePublishTopology(cfg);
 
-        cfg.ReceiveEndpoint(opts.QueueName, e =>
+        cfg.ReceiveEndpoint(opts.EffectiveQueueName, e =>
         {
             // Throwaway queue: segments are large + ephemeral (short TTL) — don't pile them up while
             // the transcriber is offline, and never park multi-MB segments in an _error queue.
@@ -69,8 +73,16 @@ builder.Services.AddMassTransit(x =>
             e.ConcurrentMessageLimit = 1;
             e.PrefetchCount = 16;
 
-            KickMediaTopology.BindLiveVideo(e, opts.Channels); // no slugs → "#" (all channels)
-            e.ConfigureConsumer<LiveVideoSegmentConsumer>(ctx);
+            if (opts.IsTwitch)
+            {
+                TwitchMediaTopology.BindAudio(e, opts.Channels); // no logins → "#" (all channels)
+                e.ConfigureConsumer<TwitchAudioSegmentConsumer>(ctx);
+            }
+            else
+            {
+                KickMediaTopology.BindLiveVideo(e, opts.Channels); // no slugs → "#" (all channels)
+                e.ConfigureConsumer<LiveVideoSegmentConsumer>(ctx);
+            }
         });
     });
 });
@@ -100,9 +112,10 @@ catch (Exception ex)
     return 1;
 }
 
-log.LogInformation("Transcriber starting — channels: {Channels}; queue '{Queue}'; model {Model} ({Dir}); GPU {Gpu}; language {Lang}; files → {Files}; bus publish {Bus}",
+log.LogInformation("Transcriber starting — source {Source}; channels: {Channels}; queue '{Queue}'; model {Model} ({Dir}); GPU {Gpu}; language {Lang}; files → {Files}; bus publish {Bus}",
+    opts.IsTwitch ? "twitch (TwitchAudioSegment -> TwitchLiveTranscript)" : "kick (LiveVideoSegment -> LiveTranscript)",
     opts.Channels.Length == 0 ? "ALL" : string.Join(",", opts.Channels),
-    opts.QueueName, models.ModelName, models.ModelDirectory, opts.UseGpu, opts.DescribeLanguageMode(),
+    opts.EffectiveQueueName, models.ModelName, models.ModelDirectory, opts.UseGpu, opts.DescribeLanguageMode(),
     outputDir ?? "(off)", opts.PublishToBus);
 
 await host.RunAsync();

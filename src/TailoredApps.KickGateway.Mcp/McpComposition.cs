@@ -5,7 +5,7 @@ namespace TailoredApps.KickGateway.Mcp;
 /// <summary>What both transports share: the gateway HTTP client and the MCP server with its tools + instructions.</summary>
 internal static class McpComposition
 {
-    public const string Version = "1.4.0";
+    public const string Version = "1.5.0";
 
     public static void AddGateway(IServiceCollection services, IConfiguration config)
     {
@@ -30,8 +30,11 @@ internal static class McpComposition
             .WithTools<ChatAnalyticsTools>();
 
     private const string Instructions = """
-        Kick chat analytics for the channels this gateway ingests (webhooks + realtime stream). Use it to understand
-        the dynamics between chatters and to build personal profiles of chatters.
+        Chat analytics for the channels this gateway ingests: Kick (webhooks + realtime stream) and Twitch (EventSub
+        chat). Use it to understand the dynamics between chatters and to build personal profiles of chatters.
+        Every channel- or chatter-level tool takes 'platform' (kick, the default, or twitch): slugs/logins and user ids
+        are only unique within a platform, so a Twitch channel MUST be queried with platform=twitch. list_channels and
+        analytics_status cover both platforms (each channel row says which) unless 'platform' narrows them.
 
         Typical flow:
         1. list_channels → pick a channel; channel_overview for the big picture.

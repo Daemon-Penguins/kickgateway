@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>TailoredApps.TwitchGateway.Contracts</RootNamespace>
+
+    <!-- NuGet / DLL distribution metadata. The Twitch family is a SEPARATE package from
+         TailoredApps.KickGateway.Contracts on purpose: a subscriber that only cares about one
+         platform references one package, and the two can version independently. Same mechanics:
+         one topic exchange per CLR type (urn:message:TailoredApps.TwitchGateway.Contracts.Chat:TwitchChatMessage ...),
+         routing key = the broadcaster's Twitch login (lowercase). -->
+    <PackageId>TailoredApps.TwitchGateway.Contracts</PackageId>
+    <Version Condition="'$(Version)' == ''">0.1.0</Version>
+    <Authors>Daemon Penguins</Authors>
+    <Company>Daemon Penguins</Company>
+    <Description>MassTransit message contracts published by the Twitch side of the gateway (EventSub chat + Helix stream state + live audio/transcripts). Reference this package from any subscriber app to bind to the same RabbitMQ topic exchanges, with the broadcaster's Twitch login as the routing key for per-channel filtering.</Description>
+    <PackageTags>twitch;eventsub;masstransit;contracts;rabbitmq;topic-routing</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/Daemon-Penguins/kickgateway</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/Daemon-Penguins/kickgateway</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MassTransit.RabbitMQ" Version="8.*" />
+  </ItemGroup>
+</Project>

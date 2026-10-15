@@ -101,17 +101,29 @@ public sealed class AnalyticsApiKeyHandler(
 /// </summary>
 public sealed class AnalyticsScope
 {
-    public static readonly AnalyticsScope Unrestricted = new(null);
+    public static readonly AnalyticsScope Unrestricted = new(null, null);
 
-    private AnalyticsScope(IReadOnlyCollection<string>? slugs) => Slugs = slugs;
+    private AnalyticsScope(IReadOnlyCollection<string>? slugs, string? platform)
+    {
+        Slugs = slugs;
+        Platform = platform;
+    }
 
-    /// <summary>Allowed slugs (lowercase), or null for "all channels".</summary>
+    /// <summary>Allowed slugs (lowercase), or null for "all channels". Non-SuperAdmin scopes are built from Kick broadcasters, so Twitch channels are SuperAdmin / API-key only.</summary>
     public IReadOnlyCollection<string>? Slugs { get; }
+
+    /// <summary>Platform the request is about (<c>kick</c> / <c>twitch</c>), or null for "all platforms" (listing + status only).</summary>
+    public string? Platform { get; }
+
+    /// <summary><see cref="Platform"/> with the channel-level default (<c>kick</c>) applied.</summary>
+    public string PlatformOrDefault => Platform ?? ChatPlatforms.Kick;
 
     public bool Allows(string slug) => Slugs is null || Slugs.Contains(slug.ToLowerInvariant());
 
+    public AnalyticsScope WithPlatform(string? platform) => new(Slugs, string.IsNullOrWhiteSpace(platform) ? null : ChatPlatforms.Normalize(platform));
+
     public static AnalyticsScope ForSlugs(IEnumerable<string> slugs) =>
-        new(slugs.Select(s => s.ToLowerInvariant()).ToHashSet(StringComparer.Ordinal));
+        new(slugs.Select(s => s.ToLowerInvariant()).ToHashSet(StringComparer.Ordinal), null);
 
     public static async Task<AnalyticsScope> ForUserAsync(ClaimsPrincipal user, KickGatewayDbContext db, CancellationToken ct)
     {

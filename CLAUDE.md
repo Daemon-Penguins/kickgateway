@@ -293,6 +293,32 @@ Status: actively developed.
   counter, short retry on commit failure). `_error` queues have no consumer by design:
   alert on their message count, not on "no consumer".
 
+- **Twitch is a parallel family, never merged into the Kick one.** Everything Twitch lives in its
+  own projects and processes so either platform can be stopped alone: `TailoredApps.TwitchGateway.Contracts`
+  (own NuGet, `ITwitchEvent` envelope, `TwitchEventTopology` / `TwitchMediaTopology` routed by the
+  broadcaster **login**), `TailoredApps.Integrations.Twitch` (OAuth, Helix, EventSub protocol, GQL playback
+  token + usher HLS with stitched-ad detection), `TailoredApps.TwitchGateway.Listener` (compose profile
+  `twitch-chat`) and `TailoredApps.TwitchGateway.Capture` (`twitch-audio`). Chat comes from the **official
+  EventSub WebSocket** (`channel.chat.*`, v1) using one **bot account's** user token (`user:read:chat`,
+  connected once at `/admin/twitch`; stored like the Kick tokens, plain columns) - never the broadcaster's:
+  chat subscriptions cost 0 on the chatting user's token, while `stream.online` / `channel.update` for an
+  unauthorized broadcaster cost 1 of a 10-point budget, so live/offline/title come from Helix `GET /streams`
+  polling (synthetic `helix.*` events, dedupe keys from the stream id). Limits: 3 sessions per token, 300
+  subscriptions per session; subscriptions die with their session, so the listener deletes all of them at
+  startup and re-creates them on every new welcome (the first within 10 s). Ingest mirrors the Kick path:
+  `ReceivedTwitchEvents` inbox + EF outbox, `TwitchIngestQueue` partitioned by broadcaster. Audio: the
+  capture needs **no credentials** (GQL `PlaybackAccessToken` with the web player's public client id, then
+  usher; `audio_only` rendition, MPEG-TS 2 s segments with `PROGRAM-DATE-TIME`), skips `twitch-stitched-ad`
+  dateranges and bumps `DiscontinuitySequence` so the transcriber restarts ffmpeg; the transcriber is the
+  same image with `Transcriber:Source=twitch` (`TwitchAudioSegment` in, `TwitchLiveTranscript` out, queue
+  `transcriber-twitch`). The Api stores Twitch transcripts in `LiveTranscripts` and projects the Twitch inbox
+  into the same analytics tables - every such row carries `Platform` (`kick` / `twitch`, default `kick`),
+  the dedupe key of a Twitch transcript is `twitch:` prefixed, and `/api/analytics/*` + the MCP tools take
+  `platform` (default `kick` wherever a channel or chatter is named; slugs and numeric user ids are only
+  unique per platform). Non-SuperAdmin analytics scopes are built from Kick broadcasters, so Twitch channels
+  are SuperAdmin / API-key only. Kick's realtime listener got the matching switch (`kick-realtime` profile,
+  `KICK_REALTIME_ENABLED=false` stops it); clips-fetcher is not behind it because the Api needs it.
+
 ## Testing
 
 - Unit tests: **xUnit**.
@@ -312,7 +338,11 @@ Status: actively developed.
 TailoredApps.KickGateway.slnx
 ├── src/
 │   ├── TailoredApps.Integrations.Kick/             # Kick REST + OAuth (PKCE) + signature verifier
+│   ├── TailoredApps.Integrations.Twitch/           # Twitch OAuth + Helix + EventSub protocol + playback (GQL/usher HLS)
 │   ├── TailoredApps.KickGateway.Contracts/         # MassTransit contracts + topology helper (shipped as DLL/NuGet)
+│   ├── TailoredApps.TwitchGateway.Contracts/       # Twitch contracts (own NuGet): Chat/Channel/Media + topology routed by login
+│   ├── TailoredApps.TwitchGateway.Listener/        # EventSub chat listener + Helix stream-state poller -> Twitch inbox/outbox (+ Dockerfile)
+│   ├── TailoredApps.TwitchGateway.Capture/         # Live audio_only HLS capture -> TwitchAudioSegment (+ Dockerfile)
 │   ├── TailoredApps.KickGateway.Data/              # Shared EF DbContext + entities + migrations (Api + Realtime)
 │   ├── TailoredApps.KickGateway.Api/               # WebAPI + Blazor admin + webhook receiver + EF
 │   ├── TailoredApps.KickGateway.Realtime/          # Pusher realtime listener + live-video capture
@@ -322,7 +352,7 @@ TailoredApps.KickGateway.slnx
 │   ├── TailoredApps.KickGateway.Subscribers.Alerts/     # Sample: per-channel filtered subscriber
 │   ├── TailoredApps.KickGateway.Subscribers.Analytics/  # Sample: per-channel filtered subscriber (one consumer, many events)
 │   ├── TailoredApps.KickGateway.Subscribers.VideoRecorder/ # Sample: reassembles LiveVideoSegment into playable files
-│   ├── TailoredApps.KickGateway.Subscribers.Transcriber/   # Live speech-to-text: LiveVideoSegment → ffmpeg → Whisper → LiveTranscript (+ Dockerfile)
+│   ├── TailoredApps.KickGateway.Subscribers.Transcriber/   # Live speech-to-text: LiveVideoSegment → ffmpeg → Whisper → LiveTranscript; Source=twitch: TwitchAudioSegment → TwitchLiveTranscript (+ Dockerfile)
 │   ├── TailoredApps.KickGateway.Subtitles/         # Live-subtitles site: /{slug} = Kick's player iframe + LiveTranscript captions over SSE (+ Dockerfile)
 │   ├── TailoredApps.KickGateway.Subscribers.Translator/    # LiveTranscript (de) → LLM → LiveTranscriptTranslation (pl) (+ Dockerfile)
 │   ├── TailoredApps.KickGateway.AppHost/           # Aspire orchestrator (F5 entrypoint)

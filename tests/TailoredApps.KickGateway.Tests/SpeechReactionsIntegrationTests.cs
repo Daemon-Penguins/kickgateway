@@ -23,7 +23,7 @@ public class SpeechReactionsIntegrationTests(ChatAnalyticsDatabase fixture) : IC
         await SeedAsync(db);
         var joke = await db.LiveTranscripts.AsNoTracking().SingleAsync(x => x.Text == "the joke");
 
-        var r = await SpeechReactionQueries.ForSliceAsync(db, "alpha", joke.Id, 5, 45, 100, default);
+        var r = await SpeechReactionQueries.ForSliceAsync(db, "kick", "alpha", joke.Id, 5, 45, 100, default);
         Assert.NotNull(r);
         Assert.Equal("alpha", r.Channel);
         Assert.Equal("the joke", r.Slice.Text);
@@ -54,28 +54,28 @@ public class SpeechReactionsIntegrationTests(ChatAnalyticsDatabase fixture) : IC
         Assert.Contains("endedAt + lagMin", r.Chronology);
 
         // limit caps the list, never the stats
-        var two = await SpeechReactionQueries.ForSliceAsync(db, "alpha", joke.Id, 5, 45, 2, default);
+        var two = await SpeechReactionQueries.ForSliceAsync(db, "kick", "alpha", joke.Id, 5, 45, 2, default);
         Assert.Equal(new[] { "m1", "m2" }, two!.Messages.Select(m => m.MessageId));
         Assert.True(two.Truncated);
         Assert.Equal(4, two.Stats.Messages);
         Assert.Equal(3, two.Stats.Chatters);
 
         // a custom lag moves the window
-        var tight = await SpeechReactionQueries.ForSliceAsync(db, "alpha", joke.Id, 0, 10, 100, default);
+        var tight = await SpeechReactionQueries.ForSliceAsync(db, "kick", "alpha", joke.Id, 0, 10, 100, default);
         Assert.Equal(new[] { "m0", "m1" }, tight!.Messages.Select(m => m.MessageId));
         Assert.Equal(12, tight.Stats.PerMinute);      // 2 messages in 10 s
         Assert.Equal(6, tight.Stats.Ratio);
 
         // the first slice has no predecessor; a slice nobody reacted to has no first reply
         var earlier = await db.LiveTranscripts.AsNoTracking().SingleAsync(x => x.Text == "earlier");
-        var first = await SpeechReactionQueries.ForSliceAsync(db, "alpha", earlier.Id, 5, 45, 100, default);
+        var first = await SpeechReactionQueries.ForSliceAsync(db, "kick", "alpha", earlier.Id, 5, 45, 100, default);
         Assert.Null(first!.Previous);
         Assert.Equal("the joke", first.Next!.Text);
         Assert.Equal(new[] { "b2", "m0" }, first.Messages.Select(m => m.MessageId)); // [T0-15, T0+25)
         Assert.Equal(1, first.Stats.BaselineMessages);                                 // b1 in [T0-100, T0-40)
 
         var betaOld = await db.LiveTranscripts.AsNoTracking().SingleAsync(x => x.Text == "beta old");
-        var silent = await SpeechReactionQueries.ForSliceAsync(db, "beta", betaOld.Id, 5, 45, 100, default);
+        var silent = await SpeechReactionQueries.ForSliceAsync(db, "kick", "beta", betaOld.Id, 5, 45, 100, default);
         Assert.Empty(silent!.Messages);
         Assert.Equal(0, silent.Stats.Messages);
         Assert.Equal(0, silent.Stats.PerMinute);
@@ -85,8 +85,8 @@ public class SpeechReactionsIntegrationTests(ChatAnalyticsDatabase fixture) : IC
         Assert.Null(silent.Next);
 
         // unknown id, or an id that belongs to another channel
-        Assert.Null(await SpeechReactionQueries.ForSliceAsync(db, "alpha", 999_999, 5, 45, 100, default));
-        Assert.Null(await SpeechReactionQueries.ForSliceAsync(db, "beta", joke.Id, 5, 45, 100, default));
+        Assert.Null(await SpeechReactionQueries.ForSliceAsync(db, "kick", "alpha", 999_999, 5, 45, 100, default));
+        Assert.Null(await SpeechReactionQueries.ForSliceAsync(db, "kick", "beta", joke.Id, 5, 45, 100, default));
     }
 
     [SkippableFact]
@@ -132,7 +132,7 @@ public class SpeechReactionsIntegrationTests(ChatAnalyticsDatabase fixture) : IC
         Assert.Empty(nothing.Channels);
 
         // the overview-style window counts slices that START in it
-        var w = await TranscriptCoverageQueries.WindowAsync(db, "alpha", new AnalyticsWindow(T0, T0.AddSeconds(100)), default);
+        var w = await TranscriptCoverageQueries.WindowAsync(db, "kick", "alpha", new AnalyticsWindow(T0, T0.AddSeconds(100)), default);
         Assert.Equal(2, w.Slices);
         Assert.Equal(30, w.SpeechSeconds);
         Assert.Equal(T0, w.FirstStartedAt);
@@ -140,14 +140,14 @@ public class SpeechReactionsIntegrationTests(ChatAnalyticsDatabase fixture) : IC
         Assert.Equal(0.8, w.AverageConfidence);
         Assert.Equal(new[] { ("de", 1), ("pl", 1) }, w.Languages.Select(kv => (kv.Key, kv.Value)));
 
-        var none = await TranscriptCoverageQueries.WindowAsync(db, "alpha", new AnalyticsWindow(T0.AddHours(2), T0.AddHours(3)), default);
+        var none = await TranscriptCoverageQueries.WindowAsync(db, "kick", "alpha", new AnalyticsWindow(T0.AddHours(2), T0.AddHours(3)), default);
         Assert.Equal(0, none.Slices);
         Assert.Equal(0, none.SpeechSeconds);
         Assert.Null(none.AverageConfidence);
         Assert.Null(none.FirstStartedAt);
         Assert.Empty(none.Languages);
 
-        var unbounded = await TranscriptCoverageQueries.WindowAsync(db, "beta", new AnalyticsWindow(null, now), default);
+        var unbounded = await TranscriptCoverageQueries.WindowAsync(db, "kick", "beta", new AnalyticsWindow(null, now), default);
         Assert.Equal(1, unbounded.Slices);
     }
 

@@ -41,6 +41,7 @@ public sealed class ChannelSession : IAsyncDisposable
     private bool _isFmp4;
     private bool _warnedNoInit;
     private long _lastSeq = -1;
+    private int _lastDiscontinuity = -1;
     private string _channelId = "";
     private long _fedSegments, _emittedChunks, _silentChunks, _restarts;
     private bool _disposed;
@@ -95,6 +96,15 @@ public sealed class ChannelSession : IAsyncDisposable
                 }
                 return;
             }
+
+            // A discontinuity (encoder reconnect, or an ad break the Twitch capture skipped) resets the
+            // stream's timestamps: give ffmpeg a fresh start instead of letting it chase a PTS jump.
+            if (_lastDiscontinuity >= 0 && seg.DiscontinuitySequence != _lastDiscontinuity && _decoder is { HasExited: false } && !_isFmp4)
+            {
+                _log.LogInformation("[{Slug}] discontinuity {Old} -> {New} at sequence {Seq} - restarting the decoder", _slug, _lastDiscontinuity, seg.DiscontinuitySequence, seg.MediaSequence);
+                await StopDecoderAsync();
+            }
+            _lastDiscontinuity = seg.DiscontinuitySequence;
 
             if (_decoder is null || _decoder.HasExited)
             {

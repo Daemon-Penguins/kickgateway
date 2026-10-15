@@ -21,7 +21,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\TailoredApps.Integrations.Kick\TailoredApps.Integrations.Kick.csproj" />
+    <ProjectReference Include="..\TailoredApps.Integrations.Twitch\TailoredApps.Integrations.Twitch.csproj" />
     <ProjectReference Include="..\TailoredApps.KickGateway.Contracts\TailoredApps.KickGateway.Contracts.csproj" />
+    <ProjectReference Include="..\TailoredApps.TwitchGateway.Contracts\TailoredApps.TwitchGateway.Contracts.csproj" />
     <ProjectReference Include="..\TailoredApps.KickGateway.Data\TailoredApps.KickGateway.Data.csproj" />
     <ProjectReference Include="..\TailoredApps.KickGateway.ServiceDefaults\TailoredApps.KickGateway.ServiceDefaults.csproj" />
   </ItemGroup>

@@ -28,5 +28,8 @@
     <ProjectReference Include="..\..\src\TailoredApps.KickGateway.Subtitles\TailoredApps.KickGateway.Subtitles.csproj" />
     <ProjectReference Include="..\..\src\TailoredApps.KickGateway.Subscribers.Translator\TailoredApps.KickGateway.Subscribers.Translator.csproj" />
     <ProjectReference Include="..\..\src\TailoredApps.KickGateway.Mcp\TailoredApps.KickGateway.Mcp.csproj" />
+    <ProjectReference Include="..\..\src\TailoredApps.Integrations.Twitch\TailoredApps.Integrations.Twitch.csproj" />
+    <ProjectReference Include="..\..\src\TailoredApps.TwitchGateway.Contracts\TailoredApps.TwitchGateway.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\TailoredApps.TwitchGateway.Listener\TailoredApps.TwitchGateway.Listener.csproj" />
   </ItemGroup>
 </Project>

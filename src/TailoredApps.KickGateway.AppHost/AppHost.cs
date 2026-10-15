@@ -102,6 +102,42 @@ builder.AddProject<Projects.TailoredApps_KickGateway_Realtime>("kickgateway-real
     .WithEnvironment("Kick__ClipsFetcherSecret", clipsFetcherSecret)
     .WithEnvironment("Kick__Realtime__Video__Enabled", realtimeVideoEnabled ? "true" : "false");
 
+// Twitch side (independent of the Kick listener): EventSub chat listener + audio capture. Both read the
+// /admin/twitch roster from the shared DB. The developer app's client id/secret come from the AppHost's
+// configuration (user secrets: TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET); without them the listener idles
+// and the capture still works (it needs no credentials). Set TWITCH_ENABLED=false to skip both.
+var twitchEnabled = !string.Equals(builder.Configuration["TWITCH_ENABLED"], "false", StringComparison.OrdinalIgnoreCase);
+if (twitchEnabled)
+{
+    var twitchClientId = builder.Configuration["TWITCH_CLIENT_ID"] ?? "";
+    var twitchClientSecret = builder.Configuration["TWITCH_CLIENT_SECRET"] ?? "";
+
+    builder.AddProject<Projects.TailoredApps_TwitchGateway_Listener>("twitch-listener")
+        .WithReference(kickGatewayDb)
+        .WaitFor(kickGatewayDb)
+        .WithReference(rabbit)
+        .WaitFor(rabbit)
+        .WithEnvironment("RabbitMq__Host", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Host))
+        .WithEnvironment("RabbitMq__Port", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Port))
+        .WithEnvironment("RabbitMq__Username", rabbit.Resource.UserNameParameter!)
+        .WithEnvironment("RabbitMq__Password", rabbit.Resource.PasswordParameter)
+        .WithEnvironment("Twitch__ClientId", twitchClientId)
+        .WithEnvironment("Twitch__ClientSecret", twitchClientSecret);
+
+    builder.AddProject<Projects.TailoredApps_TwitchGateway_Capture>("twitch-capture")
+        .WithReference(kickGatewayDb)
+        .WaitFor(kickGatewayDb)
+        .WithReference(rabbit)
+        .WaitFor(rabbit)
+        .WithEnvironment("RabbitMq__Host", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Host))
+        .WithEnvironment("RabbitMq__Port", rabbit.Resource.PrimaryEndpoint.Property(Aspire.Hosting.ApplicationModel.EndpointProperty.Port))
+        .WithEnvironment("RabbitMq__Username", rabbit.Resource.UserNameParameter!)
+        .WithEnvironment("RabbitMq__Password", rabbit.Resource.PasswordParameter)
+        .WithEnvironment("Twitch__ClientId", twitchClientId)
+        .WithEnvironment("Twitch__ClientSecret", twitchClientSecret)
+        .WithEnvironment("Twitch__Capture__Enabled", "true");
+}
+
 // Three independent subscriber apps. Each uses a unique kebab-case queue
 // prefix ("loyalty", "alerts", "analytics") so RabbitMQ creates three separate
 // durable queues bound to the same per-message-type fanout exchanges the

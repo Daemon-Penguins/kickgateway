@@ -28,7 +28,7 @@ public class ChannelTimelineIntegrationTests(ChatAnalyticsDatabase fixture) : IC
         var window = new AnalyticsWindow(T0, T0.AddSeconds(300));
         var expected = new[] { "intro", "hello chat", "what do you think", "m3", "e1", "m1", "m2", "e2", "mumble", "m4" };
 
-        var full = await TimelineQueries.PageAsync(db, "alpha", window, AllKinds, 0, null, 100, default);
+        var full = await TimelineQueries.PageAsync(db, "kick", "alpha", window, AllKinds, 0, null, 100, default);
         Assert.Equal(expected, Keys(full));
         Assert.Null(full.NextCursor);
         Assert.Equal(new[] { "speech", "event", "chat" }, full.Kinds);
@@ -41,7 +41,7 @@ public class ChannelTimelineIntegrationTests(ChatAnalyticsDatabase fixture) : IC
             var pages = 0;
             do
             {
-                var page = await TimelineQueries.PageAsync(db, "alpha", window, AllKinds, 0, cursor, size, default);
+                var page = await TimelineQueries.PageAsync(db, "kick", "alpha", window, AllKinds, 0, cursor, size, default);
                 Assert.True(page.Items.Count <= size);
                 seen.AddRange(Keys(page));
                 cursor = page.NextCursor;
@@ -85,24 +85,24 @@ public class ChannelTimelineIntegrationTests(ChatAnalyticsDatabase fixture) : IC
         var window = new AnalyticsWindow(T0, T0.AddSeconds(300));
 
         Assert.True(TimelineKinds.TryParseInclude("chat", out var chatOnly, out _));
-        var chat = await TimelineQueries.PageAsync(db, "alpha", window, chatOnly, 0, null, 100, default);
+        var chat = await TimelineQueries.PageAsync(db, "kick", "alpha", window, chatOnly, 0, null, 100, default);
         Assert.Equal(new[] { "m3", "m1", "m2", "m4" }, Keys(chat));
         Assert.Equal(new[] { "chat" }, chat.Kinds);
 
         Assert.True(TimelineKinds.TryParseInclude("speech,events", out var noChat, out _));
-        var confident = await TimelineQueries.PageAsync(db, "alpha", window, noChat, 0.5f, null, 100, default);
+        var confident = await TimelineQueries.PageAsync(db, "kick", "alpha", window, noChat, 0.5f, null, 100, default);
         Assert.Equal(new[] { "intro", "hello chat", "what do you think", "e1", "e2" }, Keys(confident));
 
         // 'at' style window [T0+20, T0+30): the slice that ENDS at T0+20 still overlaps (grace), the intro does not.
-        var moment = await TimelineQueries.PageAsync(db, "alpha", new AnalyticsWindow(T0.AddSeconds(20), T0.AddSeconds(30)), AllKinds, 0, null, 100, default);
+        var moment = await TimelineQueries.PageAsync(db, "kick", "alpha", new AnalyticsWindow(T0.AddSeconds(20), T0.AddSeconds(30)), AllKinds, 0, null, 100, default);
         Assert.Equal(new[] { "hello chat", "what do you think", "m3", "e1", "m1", "m2" }, Keys(moment));
 
         // Unbounded start ('all') reaches the old slice; the other channel never leaks in.
-        var all = await TimelineQueries.PageAsync(db, "alpha", new AnalyticsWindow(null, T0.AddSeconds(300)), AllKinds, 0, null, 100, default);
+        var all = await TimelineQueries.PageAsync(db, "kick", "alpha", new AnalyticsWindow(null, T0.AddSeconds(300)), AllKinds, 0, null, 100, default);
         Assert.Equal("old", Keys(all).First());
         Assert.DoesNotContain(all.Items, i => i.Who == "beta" || i.Id.StartsWith("b", StringComparison.Ordinal));
 
-        var beta = await TimelineQueries.PageAsync(db, "beta", window, AllKinds, 0, null, 100, default);
+        var beta = await TimelineQueries.PageAsync(db, "kick", "beta", window, AllKinds, 0, null, 100, default);
         Assert.Equal(new[] { "beta speech", "b1", "bm1" }, Keys(beta));
     }
 

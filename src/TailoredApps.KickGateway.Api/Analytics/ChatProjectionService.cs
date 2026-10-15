@@ -14,6 +14,7 @@ public static class ChatProjector
 {
     public const string WebhookCheckpoint = "chat-projection:webhooks";
     public const string RealtimeCheckpoint = "chat-projection:realtime";
+    public const string TwitchCheckpoint = "chat-projection:twitch";
 
     /// <summary>Two copies of a message (one per inbox) count as the same message when sender and
     /// content match within this many seconds — only relevant if Kick's ids ever diverge between
@@ -57,8 +58,32 @@ public static class ChatProjector
             batch.Add(ChatProjectionMapper.Map(row, slug));
         }
 
-        await SaveAsync(db, batch, ChatSource.Webhook, ct);
+        await SaveAsync(db, batch, ChatSource.Webhook, ChatPlatforms.Kick, ct);
         Advance(cp, rows[^1].ReceivedAt, rows[^1].MessageId, rows.Count);
+        await db.SaveChangesAsync(ct);
+        return rows.Count;
+    }
+
+    /// <summary>The Twitch inbox (EventSub + Helix state). Chat is deduplicated on Twitch's message id like Kick's; events on the inbox key.</summary>
+    public static async Task<int> ProjectTwitchAsync(KickGatewayDbContext db, int batchSize, DateTime horizon, CancellationToken ct)
+    {
+        var cp = await CheckpointAsync(db, TwitchCheckpoint, ct);
+        var t = cp.Position;
+        var k = cp.PositionKey;
+        var rows = await db.ReceivedTwitchEvents.AsNoTracking()
+            .Where(x => x.ReceivedAt < horizon
+                        && (x.ReceivedAt > t || (x.ReceivedAt == t && string.Compare(x.DedupeKey, k) > 0)))
+            .OrderBy(x => x.ReceivedAt).ThenBy(x => x.DedupeKey)
+            .Take(batchSize)
+            .ToListAsync(ct);
+        if (rows.Count == 0) return 0;
+
+        var batch = new Batch();
+        foreach (var row in rows) batch.Add(TwitchChatProjectionMapper.Map(row));
+
+        await ResolveIdentitiesAsync(db, batch, ChatPlatforms.Twitch, ct);
+        await SaveAsync(db, batch, ChatSource.Twitch, ChatPlatforms.Twitch, ct);
+        Advance(cp, rows[^1].ReceivedAt, rows[^1].DedupeKey, rows.Count);
         await db.SaveChangesAsync(ct);
         return rows.Count;
     }
@@ -91,8 +116,8 @@ public static class ChatProjector
         foreach (var row in rows)
             batch.Add(RealtimeChatProjectionMapper.Map(row, webhookSlugs.Contains((row.Slug ?? "").ToLowerInvariant())));
 
-        await ResolveIdentitiesAsync(db, batch, ct);
-        await SaveAsync(db, batch, ChatSource.Realtime, ct);
+        await ResolveIdentitiesAsync(db, batch, ChatPlatforms.Kick, ct);
+        await SaveAsync(db, batch, ChatSource.Realtime, ChatPlatforms.Kick, ct);
         Advance(cp, rows[^1].ReceivedAt, rows[^1].DedupeKey, rows.Count);
         await db.SaveChangesAsync(ct);
         return rows.Count;
@@ -133,7 +158,7 @@ public static class ChatProjector
     /// seen (this batch first, then the stored messages), and the author of deleted messages from
     /// the message itself. Unresolvable rows keep the username and an empty id.
     /// </summary>
-    private static async Task ResolveIdentitiesAsync(KickGatewayDbContext db, Batch batch, CancellationToken ct)
+    private static async Task ResolveIdentitiesAsync(KickGatewayDbContext db, Batch batch, string platform, CancellationToken ct)
     {
         if (batch.Events.Count == 0) return;
 
@@ -154,7 +179,7 @@ public static class ChatProjector
         if (wanted.Count > 0)
         {
             var found = await db.ChatMessages.AsNoTracking()
-                .Where(m => wanted.Contains(m.SenderUsername))
+                .Where(m => m.Platform == platform && wanted.Contains(m.SenderUsername))
                 .GroupBy(m => m.SenderUsername)
                 .Select(g => new { Name = g.Key, Id = g.OrderByDescending(m => m.CreatedAt).Select(m => m.SenderUserId).FirstOrDefault() })
                 .ToListAsync(ct);
@@ -170,7 +195,7 @@ public static class ChatProjector
         var authors = deletedIds.Count == 0
             ? new Dictionary<string, (string Id, string Name)>(StringComparer.OrdinalIgnoreCase)
             : (await db.ChatMessages.AsNoTracking()
-                    .Where(m => deletedIds.Contains(m.MessageId))
+                    .Where(m => m.Platform == platform && deletedIds.Contains(m.MessageId))
                     .Select(m => new { m.MessageId, m.SenderUserId, m.SenderUsername })
                     .ToListAsync(ct))
                 .ToDictionary(m => m.MessageId, m => (m.SenderUserId, m.SenderUsername), StringComparer.OrdinalIgnoreCase);
@@ -190,14 +215,14 @@ public static class ChatProjector
         }
     }
 
-    private static async Task SaveAsync(KickGatewayDbContext db, Batch batch, ChatSource source, CancellationToken ct)
+    private static async Task SaveAsync(KickGatewayDbContext db, Batch batch, ChatSource source, string platform, CancellationToken ct)
     {
         if (batch.Messages.Count > 0)
         {
             var ids = batch.Messages.Keys.ToList();
             var existing = await db.ChatMessages.AsNoTracking().Where(m => ids.Contains(m.MessageId)).Select(m => m.MessageId).ToListAsync(ct);
             foreach (var id in existing) batch.Messages.Remove(id);
-            await DropCrossSourceDuplicatesAsync(db, batch, source, ct);
+            await DropCrossSourceDuplicatesAsync(db, batch, source, platform, ct);
             db.ChatMessages.AddRange(batch.Messages.Values);
         }
         if (batch.Events.Count > 0)
@@ -209,7 +234,7 @@ public static class ChatProjector
         }
     }
 
-    private static async Task DropCrossSourceDuplicatesAsync(KickGatewayDbContext db, Batch batch, ChatSource source, CancellationToken ct)
+    private static async Task DropCrossSourceDuplicatesAsync(KickGatewayDbContext db, Batch batch, ChatSource source, string platform, CancellationToken ct)
     {
         var tolerance = TimeSpan.FromSeconds(CrossSourceToleranceSeconds);
         foreach (var group in batch.Messages.Values.GroupBy(m => m.ChannelSlug).ToList())
@@ -218,7 +243,7 @@ public static class ChatProjector
             var from = group.Min(m => m.CreatedAt) - tolerance;
             var to = group.Max(m => m.CreatedAt) + tolerance;
             var others = await db.ChatMessages.AsNoTracking()
-                .Where(m => m.ChannelSlug == slug && m.Source != source && m.CreatedAt >= from && m.CreatedAt <= to)
+                .Where(m => m.Platform == platform && m.ChannelSlug == slug && m.Source != source && m.CreatedAt >= from && m.CreatedAt <= to)
                 .Select(m => new { m.SenderUserId, m.Content, m.CreatedAt })
                 .ToListAsync(ct);
             if (others.Count == 0) continue;
@@ -261,6 +286,8 @@ public sealed class ChatProjectionService(
             busy |= await StepAsync("webhooks", (db, h) => ChatProjector.ProjectWebhooksAsync(db, batch, h, ct), batch, lag, ct);
             if (o.IncludeRealtime)
                 busy |= await StepAsync("realtime", (db, h) => ChatProjector.ProjectRealtimeAsync(db, batch, h, ct), batch, lag, ct);
+            if (o.IncludeTwitch)
+                busy |= await StepAsync("twitch", (db, h) => ChatProjector.ProjectTwitchAsync(db, batch, h, ct), batch, lag, ct);
             if (ct.IsCancellationRequested) break;
 
             if (!busy)

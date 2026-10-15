@@ -68,7 +68,9 @@ public static class Extensions
                     // Consume/receive duration, faults (consume.errors), retries and outbox delivery, per endpoint + message type.
                     .AddMeter(MassTransitInstrumentationName)
                     // Ingest latency at the edges (webhooks, Pusher) and end-to-end delivery lag - see KickGatewayMetrics.
-                    .AddMeter(KickGatewayMetrics.MeterName);
+                    .AddMeter(KickGatewayMetrics.MeterName)
+                    // The Twitch side: EventSub ingest, session health, audio capture - see TwitchGatewayMetrics.
+                    .AddMeter(TwitchGatewayMetrics.MeterName);
             })
             .WithTracing(tracing =>
             {

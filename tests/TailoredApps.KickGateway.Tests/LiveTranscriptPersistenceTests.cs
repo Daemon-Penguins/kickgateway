@@ -87,7 +87,7 @@ public class LiveTranscriptPersistenceTests(ChatAnalyticsDatabase fixture) : ICl
             Assert.Equal(LiveTranscriptRecord.BuildDedupeKey("alpha", first.StartedAt, 0), rows[0].DedupeKey);
 
             // Window covering only the second slice (overlap semantics: StartedAt < To && EndedAt >= From).
-            var page = await TranscriptQueries.PageAsync(db, "alpha",
+            var page = await TranscriptQueries.PageAsync(db, "kick", "alpha",
                 new AnalyticsWindow(T0.AddSeconds(13), T0.AddSeconds(20)), null, null, null, 100, default);
             Assert.Single(page.Items);
             Assert.Equal(second.Text, page.Items[0].Text);
@@ -95,38 +95,38 @@ public class LiveTranscriptPersistenceTests(ChatAnalyticsDatabase fixture) : ICl
             Assert.Equal(T0.AddSeconds(12.25), page.Items[0].Segments[0].StartedAt);
 
             // Keyset paging, oldest first.
-            var p1 = await TranscriptQueries.PageAsync(db, "alpha", new AnalyticsWindow(null, T0.AddDays(1)), null, null, null, 2, default);
+            var p1 = await TranscriptQueries.PageAsync(db, "kick", "alpha", new AnalyticsWindow(null, T0.AddDays(1)), null, null, null, 2, default);
             Assert.Equal(2, p1.Items.Count);
             Assert.NotNull(p1.NextCursor);
-            var p2 = await TranscriptQueries.PageAsync(db, "alpha", new AnalyticsWindow(null, T0.AddDays(1)), null, null, p1.NextCursor, 2, default);
+            var p2 = await TranscriptQueries.PageAsync(db, "kick", "alpha", new AnalyticsWindow(null, T0.AddDays(1)), null, null, p1.NextCursor, 2, default);
             Assert.Single(p2.Items);
             Assert.Equal(third.Text, p2.Items[0].Text);
             Assert.Null(p2.NextCursor);
 
             // Text search is a substring match; LIKE wildcards in the query are literal.
-            var search = await TranscriptQueries.PageAsync(db, "alpha", new AnalyticsWindow(null, T0.AddDays(1)), "wykopywałem", null, null, 10, default);
+            var search = await TranscriptQueries.PageAsync(db, "kick", "alpha", new AnalyticsWindow(null, T0.AddDays(1)), "wykopywałem", null, null, 10, default);
             Assert.Single(search.Items);
-            var noWildcard = await TranscriptQueries.PageAsync(db, "alpha", new AnalyticsWindow(null, T0.AddDays(1)), "%", null, null, 10, default);
+            var noWildcard = await TranscriptQueries.PageAsync(db, "kick", "alpha", new AnalyticsWindow(null, T0.AddDays(1)), "%", null, null, 10, default);
             Assert.Empty(noWildcard.Items);
 
             // Language filter (case-insensitive code) + the detection fields round-trip through the row and the DTO.
-            var german = await TranscriptQueries.PageAsync(db, "alpha", new AnalyticsWindow(null, T0.AddDays(1)), null, "DE", null, 10, default);
+            var german = await TranscriptQueries.PageAsync(db, "kick", "alpha", new AnalyticsWindow(null, T0.AddDays(1)), null, "DE", null, 10, default);
             Assert.Single(german.Items);
             Assert.Equal(third.Text, german.Items[0].Text);
             Assert.Equal("de", german.Language);
             Assert.Equal("de", german.Items[0].DetectedLanguage);
             Assert.Equal(0.88f, german.Items[0].LanguageProbability);
-            Assert.Equal(2, (await TranscriptQueries.PageAsync(db, "alpha", new AnalyticsWindow(null, T0.AddDays(1)), null, "pl", null, 10, default)).Items.Count);
+            Assert.Equal(2, (await TranscriptQueries.PageAsync(db, "kick", "alpha", new AnalyticsWindow(null, T0.AddDays(1)), null, "pl", null, 10, default)).Items.Count);
             Assert.Equal("pl", rows[0].DetectedLanguage);
             Assert.Equal(0.97f, rows[0].LanguageProbability);
 
             // "What was being said when this chat message was sent?" — a moment inside the first slice.
-            var around = await TranscriptQueries.AroundAsync(db, "alpha", T0.AddSeconds(5), 0, default);
+            var around = await TranscriptQueries.AroundAsync(db, "kick", "alpha", T0.AddSeconds(5), 0, default);
             Assert.Single(around);
             Assert.Equal(first.Text, around[0].Text);
 
             // Other channels are invisible.
-            Assert.Empty((await TranscriptQueries.PageAsync(db, "beta", new AnalyticsWindow(null, T0.AddDays(1)), null, null, null, 10, default)).Items);
+            Assert.Empty((await TranscriptQueries.PageAsync(db, "kick", "beta", new AnalyticsWindow(null, T0.AddDays(1)), null, null, null, 10, default)).Items);
         }
         finally
         {

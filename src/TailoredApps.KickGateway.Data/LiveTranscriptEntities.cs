@@ -24,10 +24,15 @@ public class LiveTranscriptRecord
     [MaxLength(200)]
     public string DedupeKey { get; set; } = "";
 
-    /// <summary>Broadcaster channel slug (lowercase) — the routing key the message arrived with.</summary>
+    /// <summary>Broadcaster channel slug (Kick) or login (Twitch), lowercase — the routing key the message arrived with.</summary>
     [MaxLength(120)]
     public string ChannelSlug { get; set; } = "";
 
+    /// <summary><c>kick</c> or <c>twitch</c> (<see cref="ChatPlatforms"/>) - the slug is only unique within a platform.</summary>
+    [MaxLength(16)]
+    public string Platform { get; set; } = ChatPlatforms.Kick;
+
+    /// <summary>Kick numeric channel id, or the Twitch broadcaster user id for Twitch slices.</summary>
     [MaxLength(64)]
     public string KickChannelId { get; set; } = "";
 
@@ -82,6 +87,14 @@ public class LiveTranscriptRecord
 
     public static string BuildDedupeKey(string slug, DateTime startedAt, double audioStartSeconds) =>
         $"{slug}|{startedAt.Ticks}|{audioStartSeconds.ToString("F3", CultureInfo.InvariantCulture)}";
+
+    /// <summary>Kick keys keep their original shape (existing rows); other platforms are prefixed (<c>twitch:login|ticks|audioStart</c>) so a login equal to a Kick slug cannot collide.</summary>
+    public static string BuildDedupeKey(string platform, string slug, DateTime startedAt, double audioStartSeconds)
+    {
+        var p = ChatPlatforms.Normalize(platform);
+        var key = BuildDedupeKey(slug, startedAt, audioStartSeconds);
+        return p == ChatPlatforms.Kick ? key : $"{p}:{key}";
+    }
 }
 
 /// <summary>
@@ -100,6 +113,10 @@ public class LiveTranscriptTranslationRecord
 
     [MaxLength(120)]
     public string ChannelSlug { get; set; } = "";
+
+    /// <summary><c>kick</c> or <c>twitch</c> - see <see cref="LiveTranscriptRecord.Platform"/>.</summary>
+    [MaxLength(16)]
+    public string Platform { get; set; } = ChatPlatforms.Kick;
 
     public DateTime StartedAt { get; set; }
 
