@@ -1,0 +1,377 @@
+# Production compose file for the VPS - shipped verbatim by .github/workflows/deploy.yml to
+# /opt/apps/kickgateway/docker-compose.yml. Every ${VAR} is interpolated by docker compose from the
+# .env the workflow writes next to it (DOCKERHUB_NAMESPACE, IMAGE_TAG, secrets, feature toggles,
+# COMPOSE_PROFILES). It lives in the repo rather than inline in the workflow because GitHub caps a
+# run step that contains ${{ }} at 21000 characters and the compose grew past that with the Twitch
+# services (the 2026-10-15 deploy failed with "Exceeded max expression length 21000").
+#
+# hq-config's otel-override-sync drops a docker-compose.override.yml next to it (OTEL_* for every
+# service); an override's `environment` beats our otel.env.
+
+networks:
+  default:
+    # kickgateway internal — api ↔ worker (service discovery)
+  traefik-public:
+    external: true
+  db-internal:
+    external: true
+
+services:
+  api:
+    image: ${DOCKERHUB_NAMESPACE}/kickgateway-api:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__KickGateway=${DB_CONNECTION_STRING:-}
+      - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
+      - RabbitMq__Port=${RABBITMQ_PORT:-5672}
+      - RabbitMq__VirtualHost=${RABBITMQ_VHOST:-/}
+      - RabbitMq__Username=${RABBITMQ_USERNAME:-}
+      - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
+      - Kick__AuthBaseUrl=https://id.kick.com
+      - Kick__ApiBaseUrl=https://api.kick.com
+      - Kick__WebhookUrl=${KICK_WEBHOOK_URL:-}
+      - Kick__PublicKeyCacheMinutes=60
+      - Kick__ClipsFetcherUrl=http://clips-fetcher:8080
+      - Kick__ClipsFetcherSecret=${CLIPS_FETCHER_SECRET:-}
+      - Seed__SuperAdminUsername=${SEED_SUPERADMIN_USERNAME:-}
+      # Optional: API-key access to /api/analytics/* (MCP server). Empty = admin cookie only.
+      - Analytics__ApiKey=${ANALYTICS_API_KEY:-}
+      # Twitch developer application: the /admin/twitch bot-account OAuth + Helix lookups. Empty = Twitch pages show "not configured".
+      - Twitch__ClientId=${TWITCH_CLIENT_ID:-}
+      - Twitch__ClientSecret=${TWITCH_CLIENT_SECRET:-}
+      - OTEL_SERVICE_NAME=kickgateway-api
+    # OpenTelemetry export (OTEL_EXPORTER_OTLP_* + interval) shared by every .NET container; see docs/MONITORING.md.
+    env_file:
+      - path: otel.env
+        required: false
+    networks:
+      - default
+      - traefik-public
+      - db-internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.kickgateway-api.rule=Host(`${PUBLIC_HOST}`)"
+      - "traefik.http.routers.kickgateway-api.entrypoints=websecure"
+      - "traefik.http.routers.kickgateway-api.tls=true"
+      - "traefik.http.routers.kickgateway-api.tls.certresolver=letsencrypt-dns"
+      - "traefik.http.routers.kickgateway-api.tls.domains[0].main=${PUBLIC_HOST}"
+      - "traefik.http.services.kickgateway-api.loadbalancer.server.port=8080"
+      - "traefik.docker.network=traefik-public"
+
+  worker:
+    image: ${DOCKERHUB_NAMESPACE}/kickgateway-worker:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      - DOTNET_ENVIRONMENT=Production
+      - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
+      - RabbitMq__Port=${RABBITMQ_PORT:-5672}
+      - RabbitMq__VirtualHost=${RABBITMQ_VHOST:-/}
+      - RabbitMq__Username=${RABBITMQ_USERNAME:-}
+      - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
+      - OTEL_SERVICE_NAME=kickgateway-worker
+    env_file:
+      - path: otel.env
+        required: false
+    networks:
+      - default
+      - traefik-public
+
+  # Kick realtime (Pusher) listener + live-video capture. Profile `kick-realtime` is ON unless
+  # KICK_REALTIME_ENABLED=false - the switch exists so the Kick side can be stopped in an incident
+  # without touching the Twitch containers (and vice versa). clips-fetcher stays up regardless:
+  # the api needs it for /obs/clips and channel stats.
+  realtime:
+    image: ${DOCKERHUB_NAMESPACE}/kickgateway-realtime:${IMAGE_TAG:-latest}
+    profiles: ["kick-realtime"]
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      - DOTNET_ENVIRONMENT=Production
+      - ConnectionStrings__KickGateway=${DB_CONNECTION_STRING:-}
+      - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
+      - RabbitMq__Port=${RABBITMQ_PORT:-5672}
+      - RabbitMq__VirtualHost=${RABBITMQ_VHOST:-/}
+      - RabbitMq__Username=${RABBITMQ_USERNAME:-}
+      - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
+      # Sidecar: used to resolve each slug's channel_id/chatroom_id past Cloudflare.
+      - Kick__ClipsFetcherUrl=http://clips-fetcher:8080
+      - Kick__ClipsFetcherSecret=${CLIPS_FETCHER_SECRET:-}
+      # Kick's public Pusher app key / host. The key rotates (2026-10: 32cbd69e4b950bf97679 -> 34bf7a0ff419a2a775b9);
+      # when the listener logs "refused by Pusher", set the KICK_REALTIME_APP_KEY variable and redeploy - no rebuild.
+      - Kick__Realtime__AppKey=${KICK_REALTIME_APP_KEY:-34bf7a0ff419a2a775b9}
+      - Kick__Realtime__WsHost=${KICK_REALTIME_WS_HOST:-ws-us2.pusher.com}
+      # Live-video capture is opt-in — set REALTIME_VIDEO_ENABLED=true to turn it on.
+      - Kick__Realtime__Video__Enabled=${REALTIME_VIDEO_ENABLED:-false}
+      # Highest rendition under this cap is captured (audio for the transcriber + the subtitles relay).
+      - Kick__Realtime__Video__MaxBitrateKbps=${REALTIME_VIDEO_MAX_BITRATE_KBPS:-1500}
+      - OTEL_SERVICE_NAME=kickgateway-realtime
+    env_file:
+      - path: otel.env
+        required: false
+    networks:
+      - default
+      - traefik-public
+      - db-internal
+
+  # Chat-analytics MCP server (Streamable HTTP) at https://${PUBLIC_HOST}/mcp. A thin adapter: it calls
+  # the api over the internal network with the analytics key. Clients authenticate with the same key
+  # (Bearer / X-Api-Key) or via OAuth 2.1 — the container embeds the authorization server, whose consent
+  # page asks for that key. OAuth discovery lives at the host root (/.well-known/oauth-*), so the router
+  # must claim those paths too; Mcp__PublicBaseUrl pins the issuer/resource URLs.
+  mcp:
+    image: ${DOCKERHUB_NAMESPACE}/kickgateway-mcp:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - Mcp__Transport=http
+      - Mcp__PublicBaseUrl=https://${PUBLIC_HOST}
+      - KickGateway__BaseUrl=http://api:8080
+      - KickGateway__ApiKey=${ANALYTICS_API_KEY:-}
+    networks:
+      - default
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.kickgateway-mcp.rule=Host(`${PUBLIC_HOST}`) && (PathPrefix(`/mcp`) || PathPrefix(`/.well-known/oauth-protected-resource`) || PathPrefix(`/.well-known/oauth-authorization-server`) || PathPrefix(`/.well-known/openid-configuration`))"
+      - "traefik.http.routers.kickgateway-mcp.priority=100"
+      - "traefik.http.routers.kickgateway-mcp.entrypoints=websecure"
+      - "traefik.http.routers.kickgateway-mcp.tls=true"
+      - "traefik.http.routers.kickgateway-mcp.tls.certresolver=letsencrypt-dns"
+      - "traefik.http.routers.kickgateway-mcp.tls.domains[0].main=${PUBLIC_HOST}"
+      - "traefik.http.services.kickgateway-mcp.loadbalancer.server.port=8080"
+      - "traefik.docker.network=traefik-public"
+
+  # Live-subtitles site (OPT-IN via SUBTITLES_ENABLED + SUBTITLES_HOST): https://${SUBTITLES_HOST}/{slug}
+  # embeds Kick's own player and overlays the channel's LiveTranscript stream as captions (SSE).
+  # Video never flows through the VPS (Kick's CDN only serves browsers from kick.com origins, so the
+  # iframe is the only option anyway); this container only relays text. Separate hostname → its
+  # own Traefik router + certificate. SUBTITLES_CHANNELS (comma-separated slugs) limits the pages
+  # served and the transcripts received; empty = any channel.
+  subtitles:
+    image: ${DOCKERHUB_NAMESPACE}/kickgateway-subtitles:${IMAGE_TAG:-latest}
+    profiles: ["subtitles"]
+    restart: unless-stopped
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
+      - RabbitMq__Port=${RABBITMQ_PORT:-5672}
+      - RabbitMq__VirtualHost=${RABBITMQ_VHOST:-/}
+      - RabbitMq__Username=${RABBITMQ_USERNAME:-}
+      - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
+      - Subtitles__Channels=${SUBTITLES_CHANNELS:-}
+      # Delayed player (token-gated relay of the captured segments). Empty token = relay off.
+      - Subtitles__Relay__Token=${SUBTITLES_RELAY_TOKEN:-}
+      - Subtitles__Relay__MaxViewersPerChannel=${SUBTITLES_RELAY_MAX_VIEWERS:-3}
+      - OTEL_SERVICE_NAME=kickgateway-subtitles
+    env_file:
+      - path: otel.env
+        required: false
+    networks:
+      - default
+      - traefik-public
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.kickgateway-subtitles.rule=Host(`${SUBTITLES_HOST}`)"
+      - "traefik.http.routers.kickgateway-subtitles.entrypoints=websecure"
+      - "traefik.http.routers.kickgateway-subtitles.tls=true"
+      - "traefik.http.routers.kickgateway-subtitles.tls.certresolver=letsencrypt-dns"
+      - "traefik.http.routers.kickgateway-subtitles.tls.domains[0].main=${SUBTITLES_HOST}"
+      - "traefik.http.services.kickgateway-subtitles.loadbalancer.server.port=8080"
+      - "traefik.docker.network=traefik-public"
+
+  # Translator (OPT-IN via TRANSLATOR_ENABLED): LiveTranscript slices in the configured source languages
+  # (default German) are translated into TRANSLATOR_TARGET_LANGUAGE (default Polish) and published as
+  # LiveTranscriptTranslation - stored by the api next to the transcript and shown by the subtitles site.
+  # Provider: deepl (default; free plan = 500k chars/month, key ends with :fx), openai (any
+  # /chat/completions endpoint - a local Ollama needs no key) or anthropic. One call per slice
+  # (~10-15 s of speech); slices below the confidence floor or older than two minutes are skipped.
+  translator:
+    image: ${DOCKERHUB_NAMESPACE}/kickgateway-translator:${IMAGE_TAG:-latest}
+    profiles: ["translator"]
+    restart: unless-stopped
+    environment:
+      - DOTNET_ENVIRONMENT=Production
+      - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
+      - RabbitMq__Port=${RABBITMQ_PORT:-5672}
+      - RabbitMq__VirtualHost=${RABBITMQ_VHOST:-/}
+      - RabbitMq__Username=${RABBITMQ_USERNAME:-}
+      - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
+      - Translator__SourceLanguages=${TRANSLATOR_SOURCE_LANGUAGES:-de}
+      - Translator__TargetLanguage=${TRANSLATOR_TARGET_LANGUAGE:-pl}
+      - Translator__Channels=${TRANSLATOR_CHANNELS:-}
+      - Translator__Provider__Name=${TRANSLATOR_PROVIDER:-deepl}
+      - Translator__Provider__ApiKey=${TRANSLATOR_API_KEY:-}
+      - Translator__Provider__Model=${TRANSLATOR_MODEL:-}
+      - Translator__Provider__BaseUrl=${TRANSLATOR_BASE_URL:-}
+      - Translator__Provider__Formality=${TRANSLATOR_FORMALITY:-prefer_less}
+      - OTEL_SERVICE_NAME=kickgateway-translator
+    env_file:
+      - path: otel.env
+        required: false
+    networks:
+      - default
+      - traefik-public   # the OTLP collector (alloy) lives there, like rabbitmq
+
+  # Live speech-to-text, CPU only (no GPU on the VPS), OPT-IN. Consumes LiveVideoSegment - so it only
+  # works while REALTIME_VIDEO_ENABLED=true and a channel is live - and publishes LiveTranscript,
+  # which the api stores in LiveTranscripts. Default model LargeV3Turbo (best Polish quality; the
+  # VPS has plenty of cores) - if the logs show 'slower than real time' / dropped chunks, set
+  # TRANSCRIBER_MODEL=Small (~6x cheaper). The GGML model is downloaded from Hugging Face on
+  # first start into the models volume. cpu_shares keeps Whisper below the api under contention.
+  transcriber:
+    image: ${DOCKERHUB_NAMESPACE}/kickgateway-transcriber:${IMAGE_TAG:-latest}
+    # Opt-in via the TRANSCRIBER_ENABLED repo variable (-> COMPOSE_PROFILES in .env). Off by
+    # default: run exactly ONE transcriber per channel (e.g. on a GPU box publishing to this
+    # broker) - two producers would store every sentence twice (DedupeKey is per process).
+    profiles: ["transcriber"]
+    restart: unless-stopped
+    depends_on:
+      - api
+    cpu_shares: 512
+    environment:
+      - DOTNET_ENVIRONMENT=Production
+      - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
+      - RabbitMq__Port=${RABBITMQ_PORT:-5672}
+      - RabbitMq__VirtualHost=${RABBITMQ_VHOST:-/}
+      - RabbitMq__Username=${RABBITMQ_USERNAME:-}
+      - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
+      - Transcriber__UseGpu=false
+      - Transcriber__Model=${TRANSCRIBER_MODEL:-LargeV3Turbo}
+      - Transcriber__Quantization=${TRANSCRIBER_QUANTIZATION:-Q5_0}
+      - Transcriber__Language=${TRANSCRIBER_LANGUAGE:-pl}
+      - Transcriber__Languages=${TRANSCRIBER_LANGUAGES-pl,en,de}
+      - Transcriber__LanguageSwitchMinProbability=${TRANSCRIBER_LANGUAGE_MIN_PROBABILITY:-0.7}
+      - Transcriber__LanguageSwitchConfirmChunks=${TRANSCRIBER_LANGUAGE_CONFIRM_CHUNKS:-2}
+      - Transcriber__Threads=${TRANSCRIBER_THREADS:-0}
+      - Transcriber__WriteFiles=${TRANSCRIBER_WRITE_FILES:-false}
+      - Transcriber__ModelDir=/models
+      - Transcriber__OutputDir=/transcripts
+      - OTEL_SERVICE_NAME=kickgateway-transcriber
+    env_file:
+      - path: otel.env
+        required: false
+    volumes:
+      - transcriber-models:/models
+      - transcriber-transcripts:/transcripts
+    networks:
+      - default
+      - traefik-public
+
+  clips-fetcher:
+    image: ${DOCKERHUB_NAMESPACE}/kickgateway-clips-fetcher:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      - FETCH_SECRET=${CLIPS_FETCHER_SECRET:-}
+    networks:
+      - default
+
+  # ===================== Twitch (independent of everything Kick above) =====================
+
+  # Twitch chat listener (OPT-IN via TWITCH_CHAT_ENABLED): EventSub WebSocket chat for the /admin/twitch
+  # roster using the connected bot account + Helix stream-state polling -> ReceivedTwitchEvents inbox ->
+  # Contracts.Twitch.* on login-routed topic exchanges. Needs the Twitch developer app (TWITCH_CLIENT_ID /
+  # TWITCH_CLIENT_SECRET) and a bot connected at /admin/twitch; without them it idles and says so in its log.
+  twitch-listener:
+    image: ${DOCKERHUB_NAMESPACE}/kickgateway-twitch-listener:${IMAGE_TAG:-latest}
+    profiles: ["twitch-chat"]
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      - DOTNET_ENVIRONMENT=Production
+      - ConnectionStrings__KickGateway=${DB_CONNECTION_STRING:-}
+      - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
+      - RabbitMq__Port=${RABBITMQ_PORT:-5672}
+      - RabbitMq__VirtualHost=${RABBITMQ_VHOST:-/}
+      - RabbitMq__Username=${RABBITMQ_USERNAME:-}
+      - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
+      - Twitch__ClientId=${TWITCH_CLIENT_ID:-}
+      - Twitch__ClientSecret=${TWITCH_CLIENT_SECRET:-}
+      - OTEL_SERVICE_NAME=kickgateway-twitch-listener
+    env_file:
+      - path: otel.env
+        required: false
+    networks:
+      - default
+      - traefik-public
+      - db-internal
+
+  # Twitch audio capture (OPT-IN via TWITCH_AUDIO_ENABLED): pulls the audio_only HLS rendition of every roster
+  # channel with Audio on, the way Twitch's own player does (no credentials), and publishes TwitchAudioSegment
+  # (short TTL) for transcriber-twitch. Liveness via Helix when the app is configured, via usher otherwise.
+  twitch-capture:
+    image: ${DOCKERHUB_NAMESPACE}/kickgateway-twitch-capture:${IMAGE_TAG:-latest}
+    profiles: ["twitch-audio"]
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      - DOTNET_ENVIRONMENT=Production
+      - ConnectionStrings__KickGateway=${DB_CONNECTION_STRING:-}
+      - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
+      - RabbitMq__Port=${RABBITMQ_PORT:-5672}
+      - RabbitMq__VirtualHost=${RABBITMQ_VHOST:-/}
+      - RabbitMq__Username=${RABBITMQ_USERNAME:-}
+      - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
+      - Twitch__ClientId=${TWITCH_CLIENT_ID:-}
+      - Twitch__ClientSecret=${TWITCH_CLIENT_SECRET:-}
+      - Twitch__Capture__Enabled=true
+      - Twitch__Capture__Rendition=${TWITCH_AUDIO_RENDITION:-audio_only}
+      - OTEL_SERVICE_NAME=kickgateway-twitch-capture
+    env_file:
+      - path: otel.env
+        required: false
+    networks:
+      - default
+      - traefik-public
+      - db-internal
+
+  # Twitch transcriber (OPT-IN via TWITCH_TRANSCRIBER_ENABLED): the same transcriber image with
+  # Transcriber__Source=twitch - consumes TwitchAudioSegment on its own queue, publishes TwitchLiveTranscript,
+  # which the api stores with Platform=twitch. Same CPU caveat as `transcriber`; shares the models volume.
+  transcriber-twitch:
+    image: ${DOCKERHUB_NAMESPACE}/kickgateway-transcriber:${IMAGE_TAG:-latest}
+    profiles: ["twitch-transcriber"]
+    restart: unless-stopped
+    depends_on:
+      - api
+    cpu_shares: 512
+    environment:
+      - DOTNET_ENVIRONMENT=Production
+      - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
+      - RabbitMq__Port=${RABBITMQ_PORT:-5672}
+      - RabbitMq__VirtualHost=${RABBITMQ_VHOST:-/}
+      - RabbitMq__Username=${RABBITMQ_USERNAME:-}
+      - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
+      - Transcriber__Source=twitch
+      - Transcriber__UseGpu=false
+      - Transcriber__Model=${TRANSCRIBER_MODEL:-LargeV3Turbo}
+      - Transcriber__Quantization=${TRANSCRIBER_QUANTIZATION:-Q5_0}
+      - Transcriber__Language=${TRANSCRIBER_LANGUAGE:-pl}
+      - Transcriber__Languages=${TRANSCRIBER_LANGUAGES-pl,en,de}
+      - Transcriber__LanguageSwitchMinProbability=${TRANSCRIBER_LANGUAGE_MIN_PROBABILITY:-0.7}
+      - Transcriber__LanguageSwitchConfirmChunks=${TRANSCRIBER_LANGUAGE_CONFIRM_CHUNKS:-2}
+      - Transcriber__Threads=${TRANSCRIBER_THREADS:-0}
+      - Transcriber__WriteFiles=${TRANSCRIBER_WRITE_FILES:-false}
+      - Transcriber__ModelDir=/models
+      - Transcriber__OutputDir=/transcripts
+      - OTEL_SERVICE_NAME=kickgateway-transcriber-twitch
+    env_file:
+      - path: otel.env
+        required: false
+    volumes:
+      - transcriber-models:/models
+      - transcriber-twitch-transcripts:/transcripts
+    networks:
+      - default
+      - traefik-public
+volumes:
+  transcriber-models:
+  transcriber-transcripts:
+  transcriber-twitch-transcripts:

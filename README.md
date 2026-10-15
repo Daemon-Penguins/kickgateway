@@ -200,8 +200,11 @@ For the manual fallback, `docker compose` runs it on `localhost:8099`; see
 ## Deploy
 
 `.github/workflows/deploy.yml` builds the Docker images (api, worker, realtime,
-mcp, transcriber, clips-fetcher), pushes to Docker Hub,
-and deploys to a VPS via SSH + `docker compose`. The compose stack joins two
+mcp, transcriber, subtitles, translator, twitch-listener, twitch-capture,
+clips-fetcher), pushes to Docker Hub, and deploys to a VPS via SSH + `docker compose`.
+The production compose file is `deploy/docker-compose.prod.yml`, shipped verbatim: every
+`${VAR}` in it comes from the `.env` the workflow writes next to it (`DOCKERHUB_NAMESPACE`,
+`IMAGE_TAG`, secrets, feature toggles, `COMPOSE_PROFILES`). The compose stack joins two
 shared external Docker networks:
 
 - `traefik-public` — Traefik handles TLS for `${PUBLIC_HOST}`
