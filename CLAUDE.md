@@ -359,6 +359,7 @@ TailoredApps.KickGateway.slnx
 │   └── TailoredApps.KickGateway.ServiceDefaults/   # OTel/health/resilience shared
 ├── docker/docker-compose.yml                       # fallback dev infra without Aspire
 ├── docker/clips-fetcher/                           # browser-TLS fetch proxy (clips past Cloudflare)
+├── deploy/docker-compose.prod.yml                  # production compose, shipped verbatim by deploy.yml (${VAR}s from the server's .env)
 ├── deploy/macos/                                   # launchd installer + env template for running the transcriber on a Mac (Metal)
 ├── tests/TailoredApps.KickGateway.Tests/           # xUnit unit tests (+ SQL Server testcontainer integration tests)
 ├── docs/CLIENT-INTEGRATION.md                      # how external clients subscribe
@@ -386,7 +387,11 @@ TailoredApps.KickGateway.slnx
   `SameAsRequest` in dev so it works over plain-http localhost.
 - Production hostname, Docker Hub namespace, SSH target, broker credentials
   are all referenced via `${{ secrets.* }}` / `${{ vars.* }}` in
-  `.github/workflows/deploy.yml`. Nothing identifying is committed.
+  `.github/workflows/deploy.yml`. Nothing identifying is committed. The production
+  compose lives in `deploy/docker-compose.prod.yml` and is shipped verbatim: it must stay
+  free of `${{ }}` (its `${VAR}`s come from the `.env` the workflow writes, incl.
+  `DOCKERHUB_NAMESPACE`). GitHub caps a `run:` step that contains `${{ }}` at 21000
+  characters - the inline compose heredoc hit that on 2026-10-15 and broke the deploy.
 
 ## Dev commands
 
