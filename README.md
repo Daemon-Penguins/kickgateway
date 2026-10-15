@@ -223,6 +223,8 @@ push) returns to the pipeline-managed version.
 | Variable | What |
 | --- | --- |
 | `DOCKERHUB_NAMESPACE` | Docker Hub user/org under which images are pushed (e.g. `myorg`) |
+| `KICK_REALTIME_APP_KEY` | Optional. Kick's public Pusher app key for the realtime listener, default the one baked into the image (`34bf7a0ff419a2a775b9` since 2026-10). Kick rotates it: when the listener logs `refused by Pusher` (`pusher:error 4001`), fetch the current key with `POST https://web.kick.com/api/v1/realtime/connection` (body `{"client":{"id":"<uuid>","type":"web"},"capabilities":{"accepted_providers":[{"provider":"pusher"}]}}`, no login) and set it here - a redeploy, no rebuild. |
+| `KICK_REALTIME_WS_HOST` | Optional. Pusher host, default `ws-us2.pusher.com` (`ws-<cluster>.pusher.com` from the same negotiation). |
 | `REALTIME_VIDEO_ENABLED` | Optional. `true` turns on the realtime listener's live-video capture (heavy). Defaults to `false`. The `transcriber` container only has work while this is on. |
 | `TRANSCRIBER_ENABLED` | Optional. `true` runs the CPU-only `transcriber` container on the VPS (compose profile). Default off: run exactly **one** transcriber per channel - two producers store every sentence twice. |
 | `TRANSCRIBER_MODEL` | Optional. Whisper GGML model for the CPU-only `transcriber` container: `LargeV3Turbo` (default, best quality, needs a strong CPU), `Medium`, `Small` (~6x cheaper), `Base`. Watch the logs for `slower than real time` / dropped chunks. |

@@ -98,6 +98,7 @@ a subscriber. All durations are seconds; histogram buckets are tuned for ms-leve
 | `kickgateway.realtime.ingest.duration` | histogram (s) | `kick.event`, `outcome` | Pusher frame taken off the socket -> inbox row + outbox publish committed, **including** the wait in the ingest queue. `kick.event` is the short Kick event name (`ChatMessageEvent`). `outcome`: `published`, `duplicate`, `error` (dropped after the retries). |
 | `kickgateway.realtime.ingest.queue_depth` | gauge | | Frames waiting for an ingest worker (all workers). Sustained growth = SQL cannot keep up with chat volume. |
 | `kickgateway.realtime.ingest.dropped` | counter | `reason` | Frames thrown away because their worker's queue was full (`Kick:Realtime:IngestQueueCapacity`, 1000 per worker). Must stay at 0; each one is lost chat. |
+| `kickgateway.realtime.connection.errors` | counter | `reason`, `pusher.code` | Pusher sessions that ended abnormally. `refused` = `pusher:error` 4000-4099, i.e. the app key / cluster is wrong because Kick rotated it (2026-10-15: 4001 "App key ... not in this cluster", every reconnect, zero frames for hours) - fix `KICK_REALTIME_APP_KEY`; `pusher_error` = other codes; `dropped` = socket error; `closed` = by the server. A healthy listener shows a handful of `closed`/`dropped` a day. |
 | `kickgateway.event.delivery_lag` | histogram (s) | `kick.event_type` | **End to end**: the webhook reached the gateway -> the published contract reached a subscriber. Measured on the Api's own live-feed consumer, so it is exactly what a downstream app sees: outbox delivery + RabbitMQ + consume. This is the "does the system react to new messages" number. |
 
 ### MassTransit - meter `MassTransit` (every service)
@@ -158,6 +159,8 @@ provisioned rules live in hq-config
 | Event delivery lag (p95 over 5 s end to end) | `histogram_quantile(0.95, sum by (le) (rate(kickgateway_event_delivery_lag_seconds_bucket[5m]))) > 5` | 5m |
 | Realtime frames dropped or lost | `sum(increase(kickgateway_realtime_ingest_dropped_total[5m])) > 0 or sum(increase(kickgateway_realtime_ingest_duration_seconds_count{outcome="error"}[5m])) > 0` | 0m |
 | Realtime ingest backing up | `max(kickgateway_realtime_ingest_queue_depth) > 500` | 2m |
+| **Realtime listener refused by Pusher** (Kick rotated the app key - set `KICK_REALTIME_APP_KEY`, see README) | `sum(increase(kickgateway_realtime_connection_errors_total{reason="refused"}[10m])) > 0` | 0m |
+| Realtime ingest silent (listener up, nothing committed for 15 min - Pusher refusing, roster empty or the sidecar failing) | `(sum(increase(kickgateway_realtime_ingest_duration_seconds_count[15m])) or vector(0)) == 0 and on () (count(target_info{service_name="kickgateway-realtime"}) > 0)` | 10m |
 | Outbox cannot reach the broker | `sum by (service_name) (increase(messaging_masstransit_outbox_delivery_errors_total[5m])) > 0` | 2m |
 | Api stopped reporting | `absent_over_time(kickgateway_webhook_duration_seconds_count[15m])` (series go stale ~5 min after the last push) | 0m |
 

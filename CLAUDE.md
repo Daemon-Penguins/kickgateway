@@ -82,8 +82,19 @@ Status: actively developed.
   double-publish). Unknown/renamed events fall through to `KickRealtimeUnknown`. It
   records+publishes through the **same inbox+outbox** as webhooks
   (`ReceivedRealtimeEvent` dedupe row + EF bus outbox). The Pusher app key rotates —
-  it's config (`Kick:Realtime:AppKey`), not hardcoded. All Kick JSON logic stays in
-  .NET (`RealtimeFrameMapper`); the WebSocket client stays dumb.
+  it's config (`Kick:Realtime:AppKey`, VPS variable `KICK_REALTIME_APP_KEY`), not
+  hardcoded. Kick's own web client moved to Centrifugo in 2026-10 (negotiated via
+  `POST web.kick.com/api/v1/realtime/connection`), and the old key `32cbd69e4b950bf97679`
+  now gets `pusher:error 4001` on every connect; the same negotiation still hands out a
+  Pusher app (`34bf7a0ff419a2a775b9`, cluster `us2`, no login) to a client that only
+  accepts `pusher`, with the same channel names and `App\Events\*` envelope, so the
+  listener stays on Pusher. A refusal (4000-4099) is logged as `refused by Pusher`,
+  counted (`kickgateway.realtime.connection.errors{reason="refused"}`) and retried at
+  the maximum backoff; the short backoff is earned back only by a session that reached
+  `pusher:connection_established` (the handshake succeeds even with a dead key - that
+  loop reconnected 1400 times an hour and ingested nothing for 5 h before it was
+  noticed). All Kick JSON logic stays in .NET (`RealtimeFrameMapper`); the WebSocket
+  client stays dumb.
 - **Realtime roster ≠ webhook roster.** The listener's roster (`RosterProvider`) is
   the **union** of two sources: explicit `RealtimeChannel` rows (managed at
   `/admin/realtime`, SuperAdmin only — slug-only, no OAuth, with per-event toggles

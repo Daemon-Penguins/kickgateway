@@ -250,6 +250,10 @@ jobs:
                 # Sidecar: used to resolve each slug's channel_id/chatroom_id past Cloudflare.
                 - Kick__ClipsFetcherUrl=http://clips-fetcher:8080
                 - Kick__ClipsFetcherSecret=${CLIPS_FETCHER_SECRET:-}
+                # Kick's public Pusher app key / host. The key rotates (2026-10: 32cbd69e4b950bf97679 -> 34bf7a0ff419a2a775b9);
+                # when the listener logs "refused by Pusher", set the KICK_REALTIME_APP_KEY variable and redeploy - no rebuild.
+                - Kick__Realtime__AppKey=${KICK_REALTIME_APP_KEY:-34bf7a0ff419a2a775b9}
+                - Kick__Realtime__WsHost=${KICK_REALTIME_WS_HOST:-ws-us2.pusher.com}
                 # Live-video capture is opt-in — set REALTIME_VIDEO_ENABLED=true to turn it on.
                 - Kick__Realtime__Video__Enabled=${REALTIME_VIDEO_ENABLED:-false}
                 # Highest rendition under this cap is captured (audio for the transcriber + the subtitles relay).
@@ -446,6 +450,8 @@ jobs:
           CLIPS_FETCHER_SECRET=${{ secrets.CLIPS_FETCHER_SECRET }}
           ANALYTICS_API_KEY=${{ secrets.ANALYTICS_API_KEY }}
           REALTIME_VIDEO_ENABLED=${{ vars.REALTIME_VIDEO_ENABLED }}
+          KICK_REALTIME_APP_KEY=${{ vars.KICK_REALTIME_APP_KEY }}
+          KICK_REALTIME_WS_HOST=${{ vars.KICK_REALTIME_WS_HOST }}
           COMPOSE_PROFILES=$PROFILES
           SUBTITLES_HOST=${{ secrets.SUBTITLES_HOST }}
           SUBTITLES_CHANNELS=${{ vars.SUBTITLES_CHANNELS }}

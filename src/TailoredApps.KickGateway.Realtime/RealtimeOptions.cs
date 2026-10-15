@@ -13,10 +13,15 @@ public class RealtimeOptions
     public string WsHost { get; set; } = "ws-us2.pusher.com";
 
     /// <summary>
-    /// Kick's public Pusher app key. This ROTATES occasionally — if messages stop, grab the
-    /// new key from the Kick site (DevTools → WS) and override here.
+    /// Kick's public Pusher app key. This ROTATES (last: 2026-10, the old <c>32cbd69e4b950bf97679</c>
+    /// now gets <c>pusher:error 4001 "App key ... not in this cluster"</c> and the listener logs
+    /// "refused by Pusher"). Fetch the current one with Kick's own negotiation, no login needed:
+    /// <c>POST https://web.kick.com/api/v1/realtime/connection</c> with
+    /// <c>{"client":{"id":"&lt;uuid&gt;","type":"web"},"capabilities":{"accepted_providers":[{"provider":"pusher"}]}}</c>
+    /// returns <c>data.connections[0].credentials.{app_key,cluster}</c> (host = <c>ws-{cluster}.pusher.com</c>).
+    /// Override via <c>Kick__Realtime__AppKey</c> (the VPS deploy maps <c>KICK_REALTIME_APP_KEY</c>).
     /// </summary>
-    public string AppKey { get; set; } = "32cbd69e4b950bf97679";
+    public string AppKey { get; set; } = "34bf7a0ff419a2a775b9";
 
     /// <summary>Pusher protocol version query param.</summary>
     public int ProtocolVersion { get; set; } = 7;
