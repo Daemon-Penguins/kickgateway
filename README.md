@@ -241,6 +241,9 @@ push) returns to the pipeline-managed version.
 | `TRANSLATOR_MODEL` / `TRANSLATOR_BASE_URL` / `TRANSLATOR_FORMALITY` | Optional. LLM model id (defaults `gpt-4o-mini` / `claude-haiku-5-5`; Ollama e.g. `qwen2.5:7b`), endpoint override (Ollama: `http://host:11434/v1`), DeepL formality (default `prefer_less`). |
 | `TRANSLATOR_SOURCE_LANGUAGES` / `TRANSLATOR_TARGET_LANGUAGE` / `TRANSLATOR_CHANNELS` | Optional. Comma-separated source codes (default `de`), target code (default `pl`), channel allowlist (empty = all). |
 | `REALTIME_VIDEO_MAX_BITRATE_KBPS` | Optional. The realtime listener captures the highest HLS rendition under this cap, default `1500` (~480p). Audio for the transcriber is the same at any rendition; the subtitles relay serves exactly this rendition. |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | Optional. `http/protobuf` (default) or `grpc` - must match the endpoint's port (Collector/Alloy: 4318 vs 4317; Prometheus' OTLP receiver is HTTP only). Not needed on the HQ VPS, see [Monitoring](#monitoring). |
+| `OTEL_METRIC_EXPORT_INTERVAL` | Optional. Metric push interval in milliseconds, default `15000`. |
+| `OTEL_TRACES_SAMPLER_ARG` | Optional. Share of traces kept (parent-based), default `0.1`. MassTransit emits a span per message, so `1` on a busy chat floods Tempo. |
 
 **Secrets** (Settings → Secrets and variables → Actions → Secrets):
 
@@ -258,6 +261,9 @@ push) returns to the pipeline-managed version.
 | `SEED_SUPERADMIN_USERNAME` | Kick handle (lowercase) of the first super-admin. Used only on first deploy; ignored thereafter. |
 | `CLIPS_FETCHER_SECRET` | Shared secret between the API and the clips-fetcher sidecar (any random string). |
 | `ANALYTICS_API_KEY` | Optional. Enables API-key access to `/api/analytics/*` and is the key for the `mcp` container at `/mcp` (as Bearer, or pasted on its OAuth consent page). Random, ≥ 24 chars. Empty = admin cookie only, and `/mcp` rejects everything. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Optional. OTLP endpoint for metrics + traces + logs of every .NET container (an OpenTelemetry Collector / Grafana Alloy). On the HQ VPS: `http://alloy:4318` (hq-config also injects `http://alloy:4317` centrally and that wins where present; the secret covers the profile containers in between). Empty = no export. |
+| `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` | Optional. Metrics-only OTLP endpoint, used verbatim - Prometheus' own receiver is `http://<host>:9090/api/v1/otlp/v1/metrics`. Enough on its own; with the shared endpoint also set it only redirects metrics. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Optional. `key=value,key2=value2` sent with every export (e.g. `Authorization=Basic …`). |
 
 ### Pre-deploy operator checklist
 
@@ -265,6 +271,21 @@ push) returns to the pipeline-managed version.
 2. `kickgateway` database created on the SQL Server + a user with `db_owner` on it. EF migrations apply on first Api start.
 3. Kick dev portal: each `KickClientApp` row's RedirectUri set to `https://${PUBLIC_HOST}/api/auth/kick/callback`, WebhookUrl set to `https://${PUBLIC_HOST}/api/webhooks/kick`.
 4. RabbitMQ broker is up and credentials are available.
+
+## Monitoring
+
+Every .NET container exports OpenTelemetry metrics, traces (sampled) and logs over
+OTLP - nothing is scraped. On the HQ VPS the only secret to set is
+`OTEL_EXPORTER_OTLP_ENDPOINT=http://alloy:4318`: hq-config's monitoring role also drops
+a `docker-compose.override.yml` into `/opt/apps/kickgateway/` that points every
+service at `http://alloy:4317` (Alloy forwards to Prometheus, Loki and Tempo), the
+override wins where it exists, and the secret covers the profile containers it has
+not caught up with. For any other host set `OTEL_EXPORTER_OTLP_ENDPOINT` (a Collector
+/ Grafana Alloy) or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` (Prometheus' own OTLP
+receiver, metrics only) and redeploy; empty = export off. What is measured (ingest time per webhook and per
+Pusher frame, end-to-end delivery lag, MassTransit consume / fault / retry / outbox
+counters), the Grafana alert rules and the runbook for `<queue>_error` queues are in
+[docs/MONITORING.md](docs/MONITORING.md).
 
 ## Consuming the contracts package
 

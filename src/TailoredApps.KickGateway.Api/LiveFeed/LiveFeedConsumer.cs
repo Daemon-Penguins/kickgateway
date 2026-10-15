@@ -1,6 +1,7 @@
 using MassTransit;
 using TailoredApps.KickGateway.Contracts;
 using TailoredApps.KickGateway.Contracts.Events;
+using TailoredApps.KickGateway.Telemetry;
 
 namespace TailoredApps.KickGateway.Api.LiveFeed;
 
@@ -79,6 +80,10 @@ public sealed class LiveFeedConsumer :
 
     private async Task Push(IKickEvent ev, string eventType, string summary)
     {
+        // The Api consumes its own firehose, which makes this the one place that sees the whole path
+        // webhook → inbox/outbox → RabbitMQ → subscriber: the lag a downstream app would see.
+        KickGatewayMetrics.RecordEventDeliveryLag(eventType, DateTime.UtcNow - ev.ReceivedAt);
+
         var clientId = await _resolver.GetClientAppIdAsync(ev.BroadcasterAccountId);
         if (clientId is null) return;            // broadcaster missing from DB — nothing to attribute
         _buffer.Append(new LiveEvent(

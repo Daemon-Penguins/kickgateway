@@ -248,6 +248,39 @@ Status: actively developed.
   Realtime listener (the Realtime service needs the roster + realtime inbox). The Api
   still owns migration *application* on startup. `DataProtectionDbContext` stays in
   the Api.
+- **Telemetry is pushed over OTLP; the ingest edges carry their own meter.**
+  `ServiceDefaults` exports three meters from every service: ASP.NET Core/runtime,
+  MassTransit's built-in `MassTransit` meter (`messaging.masstransit.consume.duration`,
+  `.consume.errors`, `.consume.retries`, `.delivery.duration`, `.outbox.delivery*`) and
+  ours, `TailoredApps.KickGateway` (`ServiceDefaults/KickGatewayMetrics.cs`): webhook
+  handling time + Kick's delivery delay (`kickgateway.webhook.*`), Pusher frame -> commit
+  (`kickgateway.realtime.ingest.*`, queue depth, drops) and the end-to-end
+  `kickgateway.event.delivery_lag` measured on the Api's own live-feed consumer. Names,
+  tags and the alert rules are a contract documented in `docs/MONITORING.md` - change
+  both. Export is env-driven only: `OTEL_EXPORTER_OTLP_ENDPOINT` = all signals (Aspire,
+  Collector/Alloy); without it each signal goes only where its own
+  `OTEL_EXPORTER_OTLP_<SIGNAL>_ENDPOINT` points (metrics alone into Prometheus' OTLP
+  receiver) - never mix `UseOtlpExporter()` with per-signal `AddOtlpExporter()`, and
+  note the per-signal `AddOtlpExporter()` ignores the signal-specific env vars (verified
+  2026-10-15: it fell back to `localhost:4317`), so `ServiceDefaults` reads them itself.
+  On the HQ VPS the endpoint is NOT ours to set: hq-config's monitoring role writes a
+  `docker-compose.override.yml` into `/opt/apps/kickgateway/` with
+  `OTEL_EXPORTER_OTLP_ENDPOINT=http://alloy:4317` (grpc) for every compose service, and
+  an override's `environment` beats our `otel.env`. The repo secret there is
+  `OTEL_EXPORTER_OTLP_ENDPOINT=http://alloy:4318` (HTTP port, default protocol) as belt and
+  braces for profile containers the override has not listed yet (it only sees services
+  active in `.env` when the sync ran); every .NET service must sit on `traefik-public`
+  (where `alloy` resolves), `env_file` must be `required: false` (the override script runs
+  `docker compose config` before our deploy has written `otel.env`), and
+  `OTEL_RESOURCE_ATTRIBUTES` mirrors the override's `service.namespace=kickgateway` so the
+  `job` label is identical either way. Traces are sampled (`OTEL_TRACES_SAMPLER_ARG`, 0.1):
+  MassTransit emits a span per message.
+  Reliability rules that go with it: the Api's SQL-backed consumers use
+  `UseMessageRetry` (incremental, 5x) before a message may reach `_error`; the realtime
+  listener's receive loops never await the DB - frames go through `RealtimeIngestQueue`
+  (partitioned by Pusher channel so a chatroom stays ordered, bounded, drop-newest with a
+  counter, short retry on commit failure). `_error` queues have no consumer by design:
+  alert on their message count, not on "no consumer".
 
 ## Testing
 
@@ -342,6 +375,8 @@ dotnet build
   or required secrets/vars.
 - **docs/CLIENT-INTEGRATION.md** — any change to the published exchange
   topology, the `KickEventTopology` helper API, or the contracts surface.
+- **docs/MONITORING.md** — any change to a metric name/tag/unit, the retry
+  policies, or the `OTEL_*` deploy variables (the alert rules depend on them).
 - **CLAUDE.md (this file)** — any change to the architectural rules, stack
   decisions, or conventions above.
 

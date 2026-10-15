@@ -98,6 +98,13 @@ builder.Services.AddSingleton<BroadcasterClientResolver>();
 // Worker continues to consume the same exchanges into its own kebab-case queue
 // — competing-consumers only happens for consumers sharing a queue name, so the
 // api's per-process queue is a true fanout and doesn't steal worker messages.
+//
+// Consumers that write to SQL retry in-process first (1, 3, 5, 7, 9 s): a transient error
+// (timeout, deadlock, failover) must not park a message in the _error queue. What still fails
+// is a real fault, lands in _error and trips the broker-side alert (docs/MONITORING.md).
+static void UseDbRetry(IReceiveEndpointConfigurator e) =>
+    e.UseMessageRetry(r => r.Incremental(5, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2)));
+
 builder.Services.AddMassTransit(x =>
 {
     x.AddEntityFrameworkOutbox<KickGatewayDbContext>(o =>
@@ -183,6 +190,7 @@ builder.Services.AddMassTransit(x =>
         // LiveTranscripts; redeliveries are absorbed by the DedupeKey.
         cfg.ReceiveEndpoint("kickgateway-live-transcripts", e =>
         {
+            UseDbRetry(e);
             KickMediaTopology.BindLiveTranscript(e);
             e.ConfigureConsumer<LiveTranscriptConsumer>(ctx);
         });
@@ -190,6 +198,7 @@ builder.Services.AddMassTransit(x =>
         // Translations of those slices (Subscribers.Translator) - stored next to the transcript, joined on read.
         cfg.ReceiveEndpoint("kickgateway-live-transcript-translations", e =>
         {
+            UseDbRetry(e);
             KickMediaTopology.BindLiveTranscriptTranslation(e);
             e.ConfigureConsumer<LiveTranscriptTranslationConsumer>(ctx);
         });
