@@ -15,6 +15,8 @@ public enum ChatSource
     Webhook = 1,
     /// <summary><see cref="ReceivedRealtimeEvent"/> (Kick Pusher stream).</summary>
     Realtime = 2,
+    /// <summary><see cref="ReceivedTwitchEvent"/> (Twitch EventSub + Helix polling).</summary>
+    Twitch = 3,
 }
 
 /// <summary>
@@ -32,9 +34,17 @@ public class ChatMessageRecord
     /// <summary>Inbox the row was first projected from.</summary>
     public ChatSource Source { get; set; }
 
-    /// <summary>Inbox key of that delivery: <see cref="ReceivedWebhook.MessageId"/> or <see cref="ReceivedRealtimeEvent.DedupeKey"/>.</summary>
+    /// <summary>Inbox key of that delivery: <see cref="ReceivedWebhook.MessageId"/>, <see cref="ReceivedRealtimeEvent.DedupeKey"/> or <see cref="ReceivedTwitchEvent.DedupeKey"/>.</summary>
     [MaxLength(200)]
     public string SourceId { get; set; } = "";
+
+    /// <summary>
+    /// <c>kick</c> or <c>twitch</c> (<see cref="ChatPlatforms"/>). Channel slugs and user ids are only unique
+    /// within a platform: a Twitch login can equal a Kick slug and both platforms use numeric user ids, so every
+    /// channel- or chatter-level query filters on this column too.
+    /// </summary>
+    [MaxLength(16)]
+    public string Platform { get; set; } = ChatPlatforms.Kick;
 
     public Guid? BroadcasterAccountId { get; set; }
 
@@ -141,6 +151,10 @@ public class ChatterEvent
 
     [MaxLength(200)]
     public string SourceId { get; set; } = "";
+
+    /// <summary><c>kick</c> or <c>twitch</c> - see <see cref="ChatMessageRecord.Platform"/>.</summary>
+    [MaxLength(16)]
+    public string Platform { get; set; } = ChatPlatforms.Kick;
 
     public ChatterEventKind Kind { get; set; }
 

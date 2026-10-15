@@ -94,6 +94,18 @@ docs/CHAT-ANALYTICS.md                        # Chatter profiles + interaction g
   (Bearer = the analytics key, or OAuth 2.1 with PKCE for ChatGPT / Claude.ai — the container embeds the
   authorization server and its consent page takes that same key) and can also run locally over stdio. See
   `docs/CHAT-ANALYTICS.md`.
+- **Twitch (parallel, independent).** The same ideas for Twitch, as separate processes and a
+  separate contracts package (`TailoredApps.TwitchGateway.Contracts`): `TwitchGateway.Listener`
+  reads chat for the channels on the **Twitch** admin page (`/admin/twitch`, login-only) over
+  Twitch's official **EventSub WebSocket** with a bot account you connect once (no broadcaster
+  consent needed), polls Helix for live/offline/title changes, records everything in its own inbox
+  (`ReceivedTwitchEvents`) and publishes `Contracts.Twitch.*` on login-routed exchanges;
+  `TwitchGateway.Capture` pulls the live `audio_only` HLS rendition the way Twitch's player does
+  (no credentials, stitched ad breaks skipped) and publishes `TwitchAudioSegment`; the transcriber
+  image with `Transcriber:Source=twitch` turns that into `TwitchLiveTranscript`. The Api stores
+  Twitch transcripts and projects Twitch chat into the same analytics tables with a `Platform`
+  column (`kick` / `twitch`) - every channel- or chatter-level analytics call takes `platform`.
+  Each piece is its own compose profile, so Kick and Twitch can be stopped independently.
 
 ## Quick start
 
@@ -225,6 +237,11 @@ push) returns to the pipeline-managed version.
 | `DOCKERHUB_NAMESPACE` | Docker Hub user/org under which images are pushed (e.g. `myorg`) |
 | `KICK_REALTIME_APP_KEY` | Optional. Kick's public Pusher app key for the realtime listener, default the one baked into the image (`34bf7a0ff419a2a775b9` since 2026-10). Kick rotates it: when the listener logs `refused by Pusher` (`pusher:error 4001`), fetch the current key with `POST https://web.kick.com/api/v1/realtime/connection` (body `{"client":{"id":"<uuid>","type":"web"},"capabilities":{"accepted_providers":[{"provider":"pusher"}]}}`, no login) and set it here - a redeploy, no rebuild. |
 | `KICK_REALTIME_WS_HOST` | Optional. Pusher host, default `ws-us2.pusher.com` (`ws-<cluster>.pusher.com` from the same negotiation). |
+| `KICK_REALTIME_ENABLED` | Optional. `false` stops the Kick realtime listener (compose profile `kick-realtime`, on by default) - an incident switch; the api, worker, mcp and clips-fetcher stay up. |
+| `TWITCH_CHAT_ENABLED` | Optional. `true` runs `twitch-listener` (profile `twitch-chat`): EventSub chat + Helix stream state for the `/admin/twitch` roster. Needs `TWITCH_CLIENT_ID`/`TWITCH_CLIENT_SECRET` and a bot account connected on that page. |
+| `TWITCH_AUDIO_ENABLED` | Optional. `true` runs `twitch-capture` (profile `twitch-audio`): live `audio_only` HLS of every roster channel with Audio on -> `TwitchAudioSegment`. No Twitch credentials needed. |
+| `TWITCH_TRANSCRIBER_ENABLED` | Optional. `true` runs `transcriber-twitch` (profile `twitch-transcriber`): the transcriber image with `Transcriber:Source=twitch`, its own queue and transcripts volume. Same one-transcriber-per-channel rule as the Kick one. |
+| `TWITCH_AUDIO_RENDITION` | Optional. Rendition the Twitch capture pulls, default `audio_only` (~160 kb/s). A video rendition name (`160p`, `480p`) works too but costs bandwidth for nothing - Whisper only hears the audio track. |
 | `REALTIME_VIDEO_ENABLED` | Optional. `true` turns on the realtime listener's live-video capture (heavy). Defaults to `false`. The `transcriber` container only has work while this is on. |
 | `TRANSCRIBER_ENABLED` | Optional. `true` runs the CPU-only `transcriber` container on the VPS (compose profile). Default off: run exactly **one** transcriber per channel - two producers store every sentence twice. |
 | `TRANSCRIBER_MODEL` | Optional. Whisper GGML model for the CPU-only `transcriber` container: `LargeV3Turbo` (default, best quality, needs a strong CPU), `Medium`, `Small` (~6x cheaper), `Base`. Watch the logs for `slower than real time` / dropped chunks. |
@@ -258,6 +275,7 @@ push) returns to the pipeline-managed version.
 | `SUBTITLES_RELAY_TOKEN` | Optional. Enables the delayed player (`/{slug}/player?token=…`): at least 16 random characters. Empty = relay off, the public iframe page still works. |
 | `TRANSLATOR_API_KEY` | Optional (with `TRANSLATOR_ENABLED`). DeepL / Anthropic key; not needed for a local Ollama via `openai`. |
 | `KICK_WEBHOOK_URL` | Full webhook URL Kick will POST to (`https://example.com/api/webhooks/kick`) |
+| `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` | Optional (Twitch side). A Twitch developer application (dev.twitch.tv/console/apps, client type **Confidential**, OAuth redirect URL `https://${PUBLIC_HOST}/api/auth/twitch/callback`). Used by the api for the bot-account OAuth + Helix lookups and by `twitch-listener` for EventSub. The capture works without it. |
 | `DB_CONNECTION_STRING` | `Server=…,1433;Database=kickgateway;User Id=…;Password=…;TrustServerCertificate=true;Encrypt=false` |
 | `RABBITMQ_HOST` / `RABBITMQ_PORT` / `RABBITMQ_VHOST` / `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | broker (private vhost recommended) |
 | `SEED_SUPERADMIN_USERNAME` | Kick handle (lowercase) of the first super-admin. Used only on first deploy; ignored thereafter. |
@@ -273,6 +291,7 @@ push) returns to the pipeline-managed version.
 2. `kickgateway` database created on the SQL Server + a user with `db_owner` on it. EF migrations apply on first Api start.
 3. Kick dev portal: each `KickClientApp` row's RedirectUri set to `https://${PUBLIC_HOST}/api/auth/kick/callback`, WebhookUrl set to `https://${PUBLIC_HOST}/api/webhooks/kick`.
 4. RabbitMQ broker is up and credentials are available.
+5. Twitch (optional): the developer application's OAuth redirect URL is `https://${PUBLIC_HOST}/api/auth/twitch/callback`; after the deploy open `/admin/twitch`, **Connect bot account** (any Twitch account; it only needs `user:read:chat`), then add channel logins and set `TWITCH_CHAT_ENABLED=true` (+ `TWITCH_AUDIO_ENABLED` / `TWITCH_TRANSCRIBER_ENABLED`) and redeploy.
 
 ## Monitoring
 

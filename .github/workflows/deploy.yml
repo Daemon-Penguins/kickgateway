@@ -25,6 +25,8 @@ env:
   TRANSCRIBER_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-transcriber
   SUBTITLES_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-subtitles
   TRANSLATOR_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-translator
+  TWITCH_LISTENER_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-twitch-listener
+  TWITCH_CAPTURE_IMAGE: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-twitch-capture
 
 jobs:
   build-and-push:
@@ -129,6 +131,30 @@ jobs:
           cache-from: type=gha,scope=transcriber
           cache-to: type=gha,scope=transcriber,mode=max
 
+      - name: Build & push Twitch listener image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/TailoredApps.TwitchGateway.Listener/Dockerfile
+          push: true
+          tags: |
+            ${{ env.TWITCH_LISTENER_IMAGE }}:latest
+            ${{ env.TWITCH_LISTENER_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha,scope=twitch-listener
+          cache-to: type=gha,scope=twitch-listener,mode=max
+
+      - name: Build & push Twitch capture image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: src/TailoredApps.TwitchGateway.Capture/Dockerfile
+          push: true
+          tags: |
+            ${{ env.TWITCH_CAPTURE_IMAGE }}:latest
+            ${{ env.TWITCH_CAPTURE_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha,scope=twitch-capture
+          cache-to: type=gha,scope=twitch-capture,mode=max
+
       - name: Build & push clips-fetcher image
         uses: docker/build-push-action@v6
         with:
@@ -195,6 +221,9 @@ jobs:
                 - Seed__SuperAdminUsername=${SEED_SUPERADMIN_USERNAME:-}
                 # Optional: API-key access to /api/analytics/* (MCP server). Empty = admin cookie only.
                 - Analytics__ApiKey=${ANALYTICS_API_KEY:-}
+                # Twitch developer application: the /admin/twitch bot-account OAuth + Helix lookups. Empty = Twitch pages show "not configured".
+                - Twitch__ClientId=${TWITCH_CLIENT_ID:-}
+                - Twitch__ClientSecret=${TWITCH_CLIENT_SECRET:-}
                 - OTEL_SERVICE_NAME=kickgateway-api
               # OpenTelemetry export (OTEL_EXPORTER_OTLP_* + interval) shared by every .NET container; see docs/MONITORING.md.
               env_file:
@@ -234,8 +263,13 @@ jobs:
                 - default
                 - traefik-public
 
+            # Kick realtime (Pusher) listener + live-video capture. Profile `kick-realtime` is ON unless
+            # KICK_REALTIME_ENABLED=false - the switch exists so the Kick side can be stopped in an incident
+            # without touching the Twitch containers (and vice versa). clips-fetcher stays up regardless:
+            # the api needs it for /obs/clips and channel stats.
             realtime:
               image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-realtime:${IMAGE_TAG:-latest}
+              profiles: ["kick-realtime"]
               restart: unless-stopped
               depends_on:
                 - api
@@ -420,20 +454,127 @@ jobs:
                 - FETCH_SECRET=${CLIPS_FETCHER_SECRET:-}
               networks:
                 - default
+
+            # ===================== Twitch (independent of everything Kick above) =====================
+
+            # Twitch chat listener (OPT-IN via TWITCH_CHAT_ENABLED): EventSub WebSocket chat for the /admin/twitch
+            # roster using the connected bot account + Helix stream-state polling -> ReceivedTwitchEvents inbox ->
+            # Contracts.Twitch.* on login-routed topic exchanges. Needs the Twitch developer app (TWITCH_CLIENT_ID /
+            # TWITCH_CLIENT_SECRET) and a bot connected at /admin/twitch; without them it idles and says so in its log.
+            twitch-listener:
+              image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-twitch-listener:${IMAGE_TAG:-latest}
+              profiles: ["twitch-chat"]
+              restart: unless-stopped
+              depends_on:
+                - api
+              environment:
+                - DOTNET_ENVIRONMENT=Production
+                - ConnectionStrings__KickGateway=${DB_CONNECTION_STRING:-}
+                - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
+                - RabbitMq__Port=${RABBITMQ_PORT:-5672}
+                - RabbitMq__VirtualHost=${RABBITMQ_VHOST:-/}
+                - RabbitMq__Username=${RABBITMQ_USERNAME:-}
+                - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
+                - Twitch__ClientId=${TWITCH_CLIENT_ID:-}
+                - Twitch__ClientSecret=${TWITCH_CLIENT_SECRET:-}
+                - OTEL_SERVICE_NAME=kickgateway-twitch-listener
+              env_file:
+                - path: otel.env
+                  required: false
+              networks:
+                - default
+                - traefik-public
+                - db-internal
+
+            # Twitch audio capture (OPT-IN via TWITCH_AUDIO_ENABLED): pulls the audio_only HLS rendition of every roster
+            # channel with Audio on, the way Twitch's own player does (no credentials), and publishes TwitchAudioSegment
+            # (short TTL) for transcriber-twitch. Liveness via Helix when the app is configured, via usher otherwise.
+            twitch-capture:
+              image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-twitch-capture:${IMAGE_TAG:-latest}
+              profiles: ["twitch-audio"]
+              restart: unless-stopped
+              depends_on:
+                - api
+              environment:
+                - DOTNET_ENVIRONMENT=Production
+                - ConnectionStrings__KickGateway=${DB_CONNECTION_STRING:-}
+                - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
+                - RabbitMq__Port=${RABBITMQ_PORT:-5672}
+                - RabbitMq__VirtualHost=${RABBITMQ_VHOST:-/}
+                - RabbitMq__Username=${RABBITMQ_USERNAME:-}
+                - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
+                - Twitch__ClientId=${TWITCH_CLIENT_ID:-}
+                - Twitch__ClientSecret=${TWITCH_CLIENT_SECRET:-}
+                - Twitch__Capture__Enabled=true
+                - Twitch__Capture__Rendition=${TWITCH_AUDIO_RENDITION:-audio_only}
+                - OTEL_SERVICE_NAME=kickgateway-twitch-capture
+              env_file:
+                - path: otel.env
+                  required: false
+              networks:
+                - default
+                - traefik-public
+                - db-internal
+
+            # Twitch transcriber (OPT-IN via TWITCH_TRANSCRIBER_ENABLED): the same transcriber image with
+            # Transcriber__Source=twitch - consumes TwitchAudioSegment on its own queue, publishes TwitchLiveTranscript,
+            # which the api stores with Platform=twitch. Same CPU caveat as `transcriber`; shares the models volume.
+            transcriber-twitch:
+              image: ${{ vars.DOCKERHUB_NAMESPACE }}/kickgateway-transcriber:${IMAGE_TAG:-latest}
+              profiles: ["twitch-transcriber"]
+              restart: unless-stopped
+              depends_on:
+                - api
+              cpu_shares: 512
+              environment:
+                - DOTNET_ENVIRONMENT=Production
+                - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
+                - RabbitMq__Port=${RABBITMQ_PORT:-5672}
+                - RabbitMq__VirtualHost=${RABBITMQ_VHOST:-/}
+                - RabbitMq__Username=${RABBITMQ_USERNAME:-}
+                - RabbitMq__Password=${RABBITMQ_PASSWORD:-}
+                - Transcriber__Source=twitch
+                - Transcriber__UseGpu=false
+                - Transcriber__Model=${TRANSCRIBER_MODEL:-LargeV3Turbo}
+                - Transcriber__Quantization=${TRANSCRIBER_QUANTIZATION:-Q5_0}
+                - Transcriber__Language=${TRANSCRIBER_LANGUAGE:-pl}
+                - Transcriber__Languages=${TRANSCRIBER_LANGUAGES-pl,en,de}
+                - Transcriber__LanguageSwitchMinProbability=${TRANSCRIBER_LANGUAGE_MIN_PROBABILITY:-0.7}
+                - Transcriber__LanguageSwitchConfirmChunks=${TRANSCRIBER_LANGUAGE_CONFIRM_CHUNKS:-2}
+                - Transcriber__Threads=${TRANSCRIBER_THREADS:-0}
+                - Transcriber__WriteFiles=${TRANSCRIBER_WRITE_FILES:-false}
+                - Transcriber__ModelDir=/models
+                - Transcriber__OutputDir=/transcripts
+                - OTEL_SERVICE_NAME=kickgateway-transcriber-twitch
+              env_file:
+                - path: otel.env
+                  required: false
+              volumes:
+                - transcriber-models:/models
+                - transcriber-twitch-transcripts:/transcripts
+              networks:
+                - default
+                - traefik-public
           volumes:
             transcriber-models:
             transcriber-transcripts:
+            transcriber-twitch-transcripts:
           COMPOSE
 
           scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             /tmp/docker-compose.prod.yml \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/apps/kickgateway/docker-compose.yml
 
-          # Opt-in compose profiles (comma-separated when several are on).
+          # Compose profiles (comma-separated when several are on). kick-realtime is the one profile that is ON by
+          # default (KICK_REALTIME_ENABLED=false turns it off); every Twitch profile is opt-in.
           PROFILES=""
-          [ "${{ vars.TRANSCRIBER_ENABLED }}" = "true" ] && PROFILES="transcriber"
+          [ "${{ vars.KICK_REALTIME_ENABLED }}" != "false" ] && PROFILES="kick-realtime"
+          [ "${{ vars.TRANSCRIBER_ENABLED }}" = "true" ] && PROFILES="${PROFILES:+$PROFILES,}transcriber"
           [ "${{ vars.SUBTITLES_ENABLED }}" = "true" ] && PROFILES="${PROFILES:+$PROFILES,}subtitles"
           [ "${{ vars.TRANSLATOR_ENABLED }}" = "true" ] && PROFILES="${PROFILES:+$PROFILES,}translator"
+          [ "${{ vars.TWITCH_CHAT_ENABLED }}" = "true" ] && PROFILES="${PROFILES:+$PROFILES,}twitch-chat"
+          [ "${{ vars.TWITCH_AUDIO_ENABLED }}" = "true" ] && PROFILES="${PROFILES:+$PROFILES,}twitch-audio"
+          [ "${{ vars.TWITCH_TRANSCRIBER_ENABLED }}" = "true" ] && PROFILES="${PROFILES:+$PROFILES,}twitch-transcriber"
 
           # Write .env with secrets
           $SSH_CMD "cat > /opt/apps/kickgateway/.env << 'ENVFILE'
@@ -452,6 +593,9 @@ jobs:
           REALTIME_VIDEO_ENABLED=${{ vars.REALTIME_VIDEO_ENABLED }}
           KICK_REALTIME_APP_KEY=${{ vars.KICK_REALTIME_APP_KEY }}
           KICK_REALTIME_WS_HOST=${{ vars.KICK_REALTIME_WS_HOST }}
+          TWITCH_CLIENT_ID=${{ secrets.TWITCH_CLIENT_ID }}
+          TWITCH_CLIENT_SECRET=${{ secrets.TWITCH_CLIENT_SECRET }}
+          TWITCH_AUDIO_RENDITION=${{ vars.TWITCH_AUDIO_RENDITION }}
           COMPOSE_PROFILES=$PROFILES
           SUBTITLES_HOST=${{ secrets.SUBTITLES_HOST }}
           SUBTITLES_CHANNELS=${{ vars.SUBTITLES_CHANNELS }}
@@ -516,6 +660,18 @@ jobs:
           fi
           if [ "${{ vars.TRANSLATOR_ENABLED }}" != "true" ]; then
             $SSH_CMD "cd /opt/apps/kickgateway && docker compose --profile translator rm -s -f translator >/dev/null 2>&1 || true"
+          fi
+          if [ "${{ vars.KICK_REALTIME_ENABLED }}" = "false" ]; then
+            $SSH_CMD "cd /opt/apps/kickgateway && docker compose --profile kick-realtime rm -s -f realtime >/dev/null 2>&1 || true"
+          fi
+          if [ "${{ vars.TWITCH_CHAT_ENABLED }}" != "true" ]; then
+            $SSH_CMD "cd /opt/apps/kickgateway && docker compose --profile twitch-chat rm -s -f twitch-listener >/dev/null 2>&1 || true"
+          fi
+          if [ "${{ vars.TWITCH_AUDIO_ENABLED }}" != "true" ]; then
+            $SSH_CMD "cd /opt/apps/kickgateway && docker compose --profile twitch-audio rm -s -f twitch-capture >/dev/null 2>&1 || true"
+          fi
+          if [ "${{ vars.TWITCH_TRANSCRIBER_ENABLED }}" != "true" ]; then
+            $SSH_CMD "cd /opt/apps/kickgateway && docker compose --profile twitch-transcriber rm -s -f transcriber-twitch >/dev/null 2>&1 || true"
           fi
 
           # Verify

@@ -66,23 +66,23 @@ public static class SpeechReactionQueries
 
     /// <summary>Null when the slice does not exist on that channel.</summary>
     public static async Task<SpeechReactions?> ForSliceAsync(
-        KickGatewayDbContext db, string channel, long id, double lagMinSeconds, double lagMaxSeconds, int limit, CancellationToken ct)
+        KickGatewayDbContext db, string platform, string channel, long id, double lagMinSeconds, double lagMaxSeconds, int limit, CancellationToken ct)
     {
-        var slice = await db.LiveTranscripts.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id && x.ChannelSlug == channel, ct);
+        var slice = await db.LiveTranscripts.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id && x.Platform == platform && x.ChannelSlug == channel, ct);
         if (slice is null) return null;
 
         var previous = await db.LiveTranscripts.AsNoTracking()
-            .Where(x => x.ChannelSlug == channel && (x.StartedAt < slice.StartedAt || (x.StartedAt == slice.StartedAt && x.Id < slice.Id)))
+            .Where(x => x.Platform == platform && x.ChannelSlug == channel && (x.StartedAt < slice.StartedAt || (x.StartedAt == slice.StartedAt && x.Id < slice.Id)))
             .OrderByDescending(x => x.StartedAt).ThenByDescending(x => x.Id)
             .FirstOrDefaultAsync(ct);
         var next = await db.LiveTranscripts.AsNoTracking()
-            .Where(x => x.ChannelSlug == channel && (x.StartedAt > slice.StartedAt || (x.StartedAt == slice.StartedAt && x.Id > slice.Id)))
+            .Where(x => x.Platform == platform && x.ChannelSlug == channel && (x.StartedAt > slice.StartedAt || (x.StartedAt == slice.StartedAt && x.Id > slice.Id)))
             .OrderBy(x => x.StartedAt).ThenBy(x => x.Id)
             .FirstOrDefaultAsync(ct);
 
         var from = slice.EndedAt.AddSeconds(lagMinSeconds);
         var to = slice.EndedAt.AddSeconds(lagMaxSeconds);
-        var inWindow = db.ChatMessages.AsNoTracking().Where(m => m.ChannelSlug == channel && m.CreatedAt >= from && m.CreatedAt < to);
+        var inWindow = db.ChatMessages.AsNoTracking().Where(m => m.Platform == platform && m.ChannelSlug == channel && m.CreatedAt >= from && m.CreatedAt < to);
         var count = await inWindow.CountAsync(ct);
         var chatters = count == 0 ? 0 : await inWindow.Select(m => m.SenderUserId).Distinct().CountAsync(ct);
         var rows = count == 0
@@ -95,7 +95,7 @@ public static class SpeechReactionQueries
 
         var baselineFrom = slice.StartedAt - BaselineSpan;
         var baseline = await db.ChatMessages.AsNoTracking()
-            .CountAsync(m => m.ChannelSlug == channel && m.CreatedAt >= baselineFrom && m.CreatedAt < slice.StartedAt, ct);
+            .CountAsync(m => m.Platform == platform && m.ChannelSlug == channel && m.CreatedAt >= baselineFrom && m.CreatedAt < slice.StartedAt, ct);
 
         var slices = new List<LiveTranscriptRecord>(3) { slice };
         if (previous is not null) slices.Add(previous);

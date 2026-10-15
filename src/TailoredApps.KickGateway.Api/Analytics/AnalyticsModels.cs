@@ -29,7 +29,8 @@ public sealed record AnalyticsStatus(
     /// <summary>Speech-to-text coverage per channel (see <see cref="TranscriptCoverage"/>); empty channel list = no transcripts stored.</summary>
     TranscriptCoverage Transcripts);
 
-public sealed record ChannelSummary(string Slug, int Messages, int Chatters, DateTime FirstMessageAt, DateTime LastMessageAt);
+/// <summary><see cref="Platform"/> is <c>kick</c> or <c>twitch</c>; a slug is only unique within a platform.</summary>
+public sealed record ChannelSummary(string Slug, string Platform, int Messages, int Chatters, DateTime FirstMessageAt, DateTime LastMessageAt);
 
 public sealed record ChannelList(AnalyticsWindow Window, IReadOnlyList<ChannelSummary> Channels);
 
@@ -62,6 +63,7 @@ public sealed record ChatterSummary(
 
 public sealed record ChannelOverview(
     string Slug,
+    string Platform,
     AnalyticsWindow Window,
     int Messages,
     int Chatters,
@@ -76,7 +78,7 @@ public sealed record ChannelOverview(
     /// <summary>Speech-to-text in the window; omitted when the channel has no slices there.</summary>
     TranscriptWindowCoverage? Transcripts);
 
-public sealed record ChatterPage(string Slug, AnalyticsWindow Window, string Sort, int Total, int Offset, IReadOnlyList<ChatterSummary> Chatters);
+public sealed record ChatterPage(string Slug, string Platform, AnalyticsWindow Window, string Sort, int Total, int Offset, IReadOnlyList<ChatterSummary> Chatters);
 
 public sealed record ChatterSearchHit(string UserId, string Username, int Messages, DateTime LastMessageAt);
 

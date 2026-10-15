@@ -29,27 +29,27 @@ public static class TimelineQueries
         "reactions to a sentence usually land 10-20 s after its endedAt. Speech is best-effort: a gap means nothing " +
         "was transcribed, not that nobody spoke.";
 
-    public static async Task<TimelinePage> PageAsync(KickGatewayDbContext db, string channel, AnalyticsWindow window,
+    public static async Task<TimelinePage> PageAsync(KickGatewayDbContext db, string platform, string channel, AnalyticsWindow window,
         IReadOnlySet<string> kinds, float minConfidence, string? cursor, int limit, CancellationToken ct)
     {
         TimelineCursor? after = TimelineCursor.TryParse(cursor, out var parsed) ? parsed : null;
         var take = limit + 1;
 
         var sources = new List<IReadOnlyList<TimelineItem>>(3);
-        if (kinds.Contains(TimelineKinds.Speech)) sources.Add(await SpeechAsync(db, channel, window, minConfidence, after, take, ct));
-        if (kinds.Contains(TimelineKinds.Event)) sources.Add(await EventsAsync(db, channel, window, after, take, ct));
-        if (kinds.Contains(TimelineKinds.Chat)) sources.Add(await ChatAsync(db, channel, window, after, take, ct));
+        if (kinds.Contains(TimelineKinds.Speech)) sources.Add(await SpeechAsync(db, platform, channel, window, minConfidence, after, take, ct));
+        if (kinds.Contains(TimelineKinds.Event)) sources.Add(await EventsAsync(db, platform, channel, window, after, take, ct));
+        if (kinds.Contains(TimelineKinds.Chat)) sources.Add(await ChatAsync(db, platform, channel, window, after, take, ct));
 
         var (items, next) = TimelineMerge.Page(sources, limit);
         return new TimelinePage(channel, window, TimelineKinds.All.Where(kinds.Contains).ToList(), minConfidence, items, next, Chronology);
     }
 
     /// <summary>Slices overlapping the window (they may start up to <see cref="SliceGrace"/> before it), by start time.</summary>
-    private static async Task<IReadOnlyList<TimelineItem>> SpeechAsync(KickGatewayDbContext db, string channel, AnalyticsWindow window,
+    private static async Task<IReadOnlyList<TimelineItem>> SpeechAsync(KickGatewayDbContext db, string platform, string channel, AnalyticsWindow window,
         float minConfidence, TimelineCursor? after, int take, CancellationToken ct)
     {
         var rank = TimelineKinds.Rank(TimelineKinds.Speech);
-        var q = db.LiveTranscripts.AsNoTracking().Where(x => x.ChannelSlug == channel && x.StartedAt < window.To);
+        var q = db.LiveTranscripts.AsNoTracking().Where(x => x.Platform == platform && x.ChannelSlug == channel && x.StartedAt < window.To);
         if (window.From is { } from)
         {
             var earliest = from - SliceGrace;
@@ -77,7 +77,7 @@ public static class TimelineQueries
         var last = rows[^1].StartedAt;
         var keys = rows.Select(r => r.DedupeKey).ToHashSet(StringComparer.Ordinal);
         var translations = (await db.LiveTranscriptTranslations.AsNoTracking()
-                .Where(t => t.ChannelSlug == channel && t.StartedAt >= first && t.StartedAt <= last)
+                .Where(t => t.Platform == platform && t.ChannelSlug == channel && t.StartedAt >= first && t.StartedAt <= last)
                 .Select(t => new { t.TranscriptDedupeKey, t.TargetLanguage, t.Text })
                 .ToListAsync(ct))
             .Where(t => keys.Contains(t.TranscriptDedupeKey))
@@ -96,11 +96,11 @@ public static class TimelineQueries
         }).ToList();
     }
 
-    private static async Task<IReadOnlyList<TimelineItem>> EventsAsync(KickGatewayDbContext db, string channel, AnalyticsWindow window,
+    private static async Task<IReadOnlyList<TimelineItem>> EventsAsync(KickGatewayDbContext db, string platform, string channel, AnalyticsWindow window,
         TimelineCursor? after, int take, CancellationToken ct)
     {
         var rank = TimelineKinds.Rank(TimelineKinds.Event);
-        var q = db.ChatterEvents.AsNoTracking().Where(e => e.ChannelSlug == channel && e.OccurredAt < window.To);
+        var q = db.ChatterEvents.AsNoTracking().Where(e => e.Platform == platform && e.ChannelSlug == channel && e.OccurredAt < window.To);
         if (window.From is { } from) q = q.Where(e => e.OccurredAt >= from);
         if (after is { } c)
         {
@@ -124,11 +124,11 @@ public static class TimelineQueries
             Amount: e.Amount == 0 ? null : e.Amount)).ToList();
     }
 
-    private static async Task<IReadOnlyList<TimelineItem>> ChatAsync(KickGatewayDbContext db, string channel, AnalyticsWindow window,
+    private static async Task<IReadOnlyList<TimelineItem>> ChatAsync(KickGatewayDbContext db, string platform, string channel, AnalyticsWindow window,
         TimelineCursor? after, int take, CancellationToken ct)
     {
         var rank = TimelineKinds.Rank(TimelineKinds.Chat);
-        var q = db.ChatMessages.AsNoTracking().Where(m => m.ChannelSlug == channel && m.CreatedAt < window.To);
+        var q = db.ChatMessages.AsNoTracking().Where(m => m.Platform == platform && m.ChannelSlug == channel && m.CreatedAt < window.To);
         if (window.From is { } from) q = q.Where(m => m.CreatedAt >= from);
         if (after is { } c)
         {

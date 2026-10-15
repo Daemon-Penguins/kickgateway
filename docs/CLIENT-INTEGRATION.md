@@ -249,6 +249,43 @@ cfg.ReceiveEndpoint("myapp-transcripts-xqc", e =>
 > tokens, sound tags) are filtered out, and when the transcriber can't keep up it drops the
 > *oldest* pending audio to stay live — expect gaps, not delays.
 
+## Twitch — a separate family, a separate package
+
+The gateway also ingests **Twitch** channels (official EventSub WebSocket chat + Helix stream state,
+plus a live audio capture). Those contracts ship as their own package,
+`TailoredApps.TwitchGateway.Contracts`, with the same mechanics: one topic exchange per CLR type,
+routing key = the broadcaster's Twitch **login** (lowercase). They never share an exchange with the
+Kick families, so a Twitch login equal to a Kick slug cannot collide.
+
+| Namespace | Contracts | Bind with |
+|---|---|---|
+| `TailoredApps.TwitchGateway.Contracts.Chat` | `TwitchChatMessage` (text, fragments with emotes/mentions/cheermotes, badges, reply, cheer bits, shared-chat source), `TwitchChatNotification` (`NoticeType` + typed `Sub` / `Resub` / `SubGift` / `CommunitySubGift` / `Raid` / `Announcement` / `BitsBadgeTier` / `CharityDonation` / `WatchStreak` ...), `TwitchChatMessageDeleted`, `TwitchChatCleared`, `TwitchChatUserMessagesCleared`, `TwitchChatSettingsUpdated` | `TwitchEventTopology.BindTwitchEvent<T>(e, "login")` |
+| `TailoredApps.TwitchGateway.Contracts.Channel` | `TwitchStreamOnline`, `TwitchStreamOffline`, `TwitchChannelUpdated` (from Helix polling, ~30 s resolution) | same |
+| `TailoredApps.TwitchGateway.Contracts` | `TwitchEventUnknown` (any EventSub type without a typed contract) | same |
+| `TailoredApps.TwitchGateway.Contracts.Media` | `TwitchAudioSegment` (ephemeral, short TTL, `audio_only` MPEG-TS with `ProgramDateTime`), `TwitchLiveTranscript` | `TwitchMediaTopology.BindAudio` / `BindTranscript` |
+
+Every event carries the `ITwitchEvent` envelope: `BroadcasterLogin` / `BroadcasterUserId` /
+`BroadcasterName`, `EventType` (`channel.chat.message` or synthetic `helix.stream.online`),
+`EventVersion`, `MessageId`, `DedupeKey`, `ReceivedAt`, `TwitchTimestamp` and the raw
+`payload.event` JSON in `RawPayload`.
+
+```csharp
+using TailoredApps.TwitchGateway.Contracts;
+using TailoredApps.TwitchGateway.Contracts.Chat;
+
+TwitchEventTopology.ConfigurePublishTopology(cfg);
+cfg.ReceiveEndpoint("myapp-twitch-chat", e =>
+{
+    TwitchEventTopology.BindTwitchEvent<TwitchChatMessage>(e, "forsen");       // no logins → "#"
+    TwitchEventTopology.BindTwitchEvent<TwitchChatNotification>(e, "forsen");
+    e.ConfigureConsumer<MyTwitchChatConsumer>(ctx);
+});
+```
+
+```xml
+<PackageReference Include="TailoredApps.TwitchGateway.Contracts" Version="0.1.*" />
+```
+
 ---
 
 ## Step 1 — Get the contracts assembly

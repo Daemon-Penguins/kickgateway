@@ -9,11 +9,13 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 COPY src/TailoredApps.KickGateway.Contracts/TailoredApps.KickGateway.Contracts.csproj src/TailoredApps.KickGateway.Contracts/
+COPY src/TailoredApps.TwitchGateway.Contracts/TailoredApps.TwitchGateway.Contracts.csproj src/TailoredApps.TwitchGateway.Contracts/
 COPY src/TailoredApps.KickGateway.ServiceDefaults/TailoredApps.KickGateway.ServiceDefaults.csproj src/TailoredApps.KickGateway.ServiceDefaults/
 COPY src/TailoredApps.KickGateway.Subscribers.Transcriber/TailoredApps.KickGateway.Subscribers.Transcriber.csproj src/TailoredApps.KickGateway.Subscribers.Transcriber/
 RUN dotnet restore src/TailoredApps.KickGateway.Subscribers.Transcriber/TailoredApps.KickGateway.Subscribers.Transcriber.csproj
 
 COPY src/TailoredApps.KickGateway.Contracts/      src/TailoredApps.KickGateway.Contracts/
+COPY src/TailoredApps.TwitchGateway.Contracts/    src/TailoredApps.TwitchGateway.Contracts/
 COPY src/TailoredApps.KickGateway.ServiceDefaults/ src/TailoredApps.KickGateway.ServiceDefaults/
 COPY src/TailoredApps.KickGateway.Subscribers.Transcriber/ src/TailoredApps.KickGateway.Subscribers.Transcriber/
 RUN dotnet publish src/TailoredApps.KickGateway.Subscribers.Transcriber/TailoredApps.KickGateway.Subscribers.Transcriber.csproj \

@@ -66,11 +66,11 @@ public static class TranscriptQueries
     /// <paramref name="includeSegments"/> = false leaves <c>segments</c> / <c>translatedSegments</c> empty (text only).
     /// </summary>
     public static async Task<TranscriptPage> PageAsync(
-        KickGatewayDbContext db, string channel, AnalyticsWindow window, string? query, string? language, string? cursor, int limit, CancellationToken ct,
+        KickGatewayDbContext db, string platform, string channel, AnalyticsWindow window, string? query, string? language, string? cursor, int limit, CancellationToken ct,
         bool includeSegments = true)
     {
         IQueryable<LiveTranscriptRecord> q = db.LiveTranscripts.AsNoTracking()
-            .Where(x => x.ChannelSlug == channel && x.StartedAt < window.To);
+            .Where(x => x.Platform == platform && x.ChannelSlug == channel && x.StartedAt < window.To);
         if (window.From is { } from) q = q.Where(x => x.EndedAt >= from);
 
         var text = string.IsNullOrWhiteSpace(query) ? null : query.Trim();
@@ -102,12 +102,12 @@ public static class TranscriptQueries
 
     /// <summary>What was being said on <paramref name="channel"/> at <paramref name="at"/> (± <paramref name="toleranceSeconds"/>), oldest first.</summary>
     public static async Task<IReadOnlyList<TranscriptDto>> AroundAsync(
-        KickGatewayDbContext db, string channel, DateTime at, double toleranceSeconds, CancellationToken ct, bool includeSegments = true)
+        KickGatewayDbContext db, string platform, string channel, DateTime at, double toleranceSeconds, CancellationToken ct, bool includeSegments = true)
     {
         var from = at.AddSeconds(-toleranceSeconds);
         var to = at.AddSeconds(toleranceSeconds);
         var rows = await db.LiveTranscripts.AsNoTracking()
-            .Where(x => x.ChannelSlug == channel && x.StartedAt <= to && x.EndedAt >= from)
+            .Where(x => x.Platform == platform && x.ChannelSlug == channel && x.StartedAt <= to && x.EndedAt >= from)
             .OrderBy(x => x.StartedAt).ThenBy(x => x.Id)
             .Take(20)
             .ToListAsync(ct);

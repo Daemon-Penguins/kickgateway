@@ -357,6 +357,13 @@ namespace TailoredApps.KickGateway.Api.Data.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
+                    b.Property<string>("Platform")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)")
+                        .HasDefaultValue("kick");
+
                     b.Property<string>("ReplyToMessageId")
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
@@ -460,6 +467,13 @@ namespace TailoredApps.KickGateway.Api.Data.Migrations
 
                     b.Property<DateTime>("OccurredAt")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("Platform")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)")
+                        .HasDefaultValue("kick");
 
                     b.Property<string>("RefId")
                         .HasMaxLength(120)
@@ -747,6 +761,13 @@ namespace TailoredApps.KickGateway.Api.Data.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
+                    b.Property<string>("Platform")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)")
+                        .HasDefaultValue("kick");
+
                     b.Property<double>("ProcessingSeconds")
                         .HasColumnType("float");
 
@@ -801,6 +822,13 @@ namespace TailoredApps.KickGateway.Api.Data.Migrations
 
                     b.Property<DateTime>("EndedAt")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("Platform")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)")
+                        .HasDefaultValue("kick");
 
                     b.Property<double>("ProcessingSeconds")
                         .HasColumnType("float");
@@ -1001,6 +1029,54 @@ namespace TailoredApps.KickGateway.Api.Data.Migrations
                     b.ToTable("ReceivedRealtimeEvents");
                 });
 
+            modelBuilder.Entity("TailoredApps.KickGateway.Api.Data.ReceivedTwitchEvent", b =>
+                {
+                    b.Property<string>("DedupeKey")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("BroadcasterLogin")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("BroadcasterUserId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("nvarchar(80)");
+
+                    b.Property<string>("EventVersion")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<DateTime?>("PublishedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("RawData")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime>("ReceivedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("TwitchTimestamp")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("DedupeKey");
+
+                    b.HasIndex("BroadcasterLogin");
+
+                    b.HasIndex("ReceivedAt");
+
+                    b.ToTable("ReceivedTwitchEvents");
+                });
+
             modelBuilder.Entity("TailoredApps.KickGateway.Api.Data.ReceivedWebhook", b =>
                 {
                     b.Property<string>("MessageId")
@@ -1040,6 +1116,125 @@ namespace TailoredApps.KickGateway.Api.Data.Migrations
                     b.HasIndex("ReceivedAt");
 
                     b.ToTable("ReceivedWebhooks");
+                });
+
+            modelBuilder.Entity("TailoredApps.KickGateway.Api.Data.TwitchBotAccount", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AccessToken")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)");
+
+                    b.Property<DateTime>("AccessTokenExpiresAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime?>("LastRefreshedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("LastValidatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Login")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("RefreshToken")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("nvarchar(4000)");
+
+                    b.Property<string>("Scopes")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId")
+                        .IsUnique();
+
+                    b.ToTable("TwitchBotAccounts");
+                });
+
+            modelBuilder.Entity("TailoredApps.KickGateway.Api.Data.TwitchChannel", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("CaptureAudio")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(false);
+
+                    b.Property<bool>("CaptureChat")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(true);
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("DisplayName")
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<bool>("IsEnabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(true);
+
+                    b.Property<DateTime?>("LastResolvedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Login")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("UserId")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Login")
+                        .IsUnique();
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("TwitchChannels");
                 });
 
             modelBuilder.Entity("MassTransit.EntityFrameworkCoreIntegration.OutboxMessage", b =>

@@ -56,6 +56,14 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
             .Take(PendingCountCap)
             .LongCountAsync(ct);
 
+        var twitch = checkpoints.FirstOrDefault(c => c.Name == ChatProjector.TwitchCheckpoint);
+        var tt = twitch?.Position ?? DateTime.MinValue;
+        var tk = twitch?.PositionKey ?? "";
+        var twitchPending = await db.ReceivedTwitchEvents.AsNoTracking()
+            .Where(x => x.ReceivedAt > tt || (x.ReceivedAt == tt && string.Compare(x.DedupeKey, tk) > 0))
+            .Take(PendingCountCap)
+            .LongCountAsync(ct);
+
         var messages = Messages(scope);
         return new AnalyticsStatus(
             ProjectionEnabled: _opts.Projection.Enabled,
@@ -63,6 +71,7 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
             {
                 Projection("webhooks", webhook, webhookPending),
                 Projection("realtime", realtime, realtimePending),
+                Projection("twitch", twitch, twitchPending),
             },
             ChatMessages: await messages.LongCountAsync(ct),
             ChatterEvents: await Events(scope).LongCountAsync(ct),
@@ -82,10 +91,11 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
     public async Task<ChannelList> ChannelsAsync(AnalyticsScope scope, AnalyticsWindow window, CancellationToken ct)
     {
         var rows = await Messages(scope, null, window)
-            .GroupBy(m => m.ChannelSlug)
+            .GroupBy(m => new { m.Platform, m.ChannelSlug })
             .Select(g => new
             {
-                Slug = g.Key,
+                g.Key.Platform,
+                Slug = g.Key.ChannelSlug,
                 Messages = g.Count(),
                 Chatters = g.Select(m => m.SenderUserId).Distinct().Count(),
                 First = g.Min(m => m.CreatedAt),
@@ -93,7 +103,7 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
             })
             .OrderByDescending(x => x.Messages)
             .ToListAsync(ct);
-        return new ChannelList(window, rows.Select(r => new ChannelSummary(r.Slug, r.Messages, r.Chatters, r.First, r.Last)).ToList());
+        return new ChannelList(window, rows.Select(r => new ChannelSummary(r.Slug, r.Platform, r.Messages, r.Chatters, r.First, r.Last)).ToList());
     }
 
     // =====================================================================================
@@ -102,6 +112,7 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
 
     public async Task<ChannelOverview> OverviewAsync(AnalyticsScope scope, string slug, AnalyticsWindow window, CancellationToken ct)
     {
+        var platform = scope.PlatformOrDefault;
         var q = Messages(scope, slug, window);
         var messages = await q.CountAsync(ct);
         var replies = await q.CountAsync(m => m.ReplyToMessageId != null, ct);
@@ -123,7 +134,7 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
         {
             var inWindow = q.Select(m => m.SenderUserId).Distinct();
             newChatters = await db.ChatMessages.AsNoTracking()
-                .Where(m => m.ChannelSlug == slug && inWindow.Contains(m.SenderUserId))
+                .Where(m => m.Platform == platform && m.ChannelSlug == slug && inWindow.Contains(m.SenderUserId))
                 .GroupBy(m => m.SenderUserId)
                 .Where(g => g.Min(m => m.CreatedAt) >= from)
                 .CountAsync(ct);
@@ -131,10 +142,10 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
 
         var top = await ChattersAsync(scope, slug, window, "messages", 15, 0, ct);
         var events = await EventTotalsAsync(scope, slug, window, ct);
-        var speech = await TranscriptCoverageQueries.WindowAsync(db, slug, window, ct);
+        var speech = await TranscriptCoverageQueries.WindowAsync(db, platform, slug, window, ct);
 
         return new ChannelOverview(
-            slug, window, messages, chatters, newChatters, chatters - newChatters,
+            slug, platform, window, messages, chatters, newChatters, chatters - newChatters,
             Share(replies, messages), Share(withMentions, messages),
             byHour,
             daily.Select(d => new DailyActivity(d.Day, d.Messages, d.Chatters)).ToList(),
@@ -170,7 +181,8 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
             _ => grouped.OrderByDescending(x => x.Messages),
         };
         var page = await ordered.ThenBy(x => x.UserId).Skip(offset).Take(limit).ToListAsync(ct);
-        if (page.Count == 0) return new ChatterPage(slug, window, sort, total, offset, Array.Empty<ChatterSummary>());
+        var platform = scope.PlatformOrDefault;
+        if (page.Count == 0) return new ChatterPage(slug, platform, window, sort, total, offset, Array.Empty<ChatterSummary>());
 
         var ids = page.Select(p => p.UserId).ToList();
         var names = await LatestNamesAsync(q, ids, ct);
@@ -189,7 +201,7 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
             .ToDictionary(x => x.Name, x => x.Count, StringComparer.OrdinalIgnoreCase);
 
         var firstSeen = await db.ChatMessages.AsNoTracking()
-            .Where(m => m.ChannelSlug == slug && ids.Contains(m.SenderUserId))
+            .Where(m => m.Platform == platform && m.ChannelSlug == slug && ids.Contains(m.SenderUserId))
             .GroupBy(m => m.SenderUserId)
             .Select(g => new { Id = g.Key, First = g.Min(m => m.CreatedAt) })
             .ToDictionaryAsync(x => x.Id, x => x.First, ct);
@@ -205,7 +217,7 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
                 p.First, p.Last, first,
                 IsNewInWindow: window.From is null || first >= window.From);
         }).ToList();
-        return new ChatterPage(slug, window, sort, total, offset, list);
+        return new ChatterPage(slug, platform, window, sort, total, offset, list);
     }
 
     public async Task<IReadOnlyList<ChatterSearchHit>> SearchChattersAsync(AnalyticsScope scope, string query, string? channel,
@@ -560,7 +572,7 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
         var issued = await issuedQ.OrderByDescending(e => e.OccurredAt).Take(15).ToListAsync(ct);
 
         var deleted = await ownMessages.CountAsync(m => db.ChatterEvents.Any(e =>
-            e.Kind == ChatterEventKind.MessageDeleted && e.RefId == m.MessageId), ct);
+            e.Platform == m.Platform && e.Kind == ChatterEventKind.MessageDeleted && e.RefId == m.MessageId), ct);
 
         var recent = received.Select(e => ToModeration(e, "received"))
             .Concat(issued.Select(e => ToModeration(e, "issued")))
@@ -809,6 +821,17 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
 
     private async Task<string?> BroadcasterUserIdAsync(AnalyticsScope scope, string slug, AnalyticsWindow window, CancellationToken ct)
     {
+        if (scope.PlatformOrDefault == ChatPlatforms.Twitch)
+        {
+            // The Twitch roster caches the broadcaster's user id once the login is verified.
+            var twitchId = await db.TwitchChannels.AsNoTracking().Where(c => c.Login == slug && c.UserId != null && c.UserId != "")
+                .Select(c => c.UserId).FirstOrDefaultAsync(ct);
+            if (!string.IsNullOrEmpty(twitchId)) return twitchId;
+            return await Messages(scope, slug, window)
+                .Where(m => m.SenderBadges != null && m.SenderBadges.Contains("broadcaster:"))
+                .Select(m => m.SenderUserId).FirstOrDefaultAsync(ct);
+        }
+
         var id = await db.Broadcasters.AsNoTracking().Where(b => b.ChannelSlug == slug && b.KickUserId != "")
             .Select(b => b.KickUserId).FirstOrDefaultAsync(ct);
         if (!string.IsNullOrEmpty(id)) return id;
@@ -848,6 +871,7 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
     private IQueryable<ChatMessageRecord> Messages(AnalyticsScope scope, string? channel = null, AnalyticsWindow? window = null)
     {
         IQueryable<ChatMessageRecord> q = db.ChatMessages.AsNoTracking();
+        if (scope.Platform is { } platform) q = q.Where(m => m.Platform == platform);
         if (scope.Slugs is { } slugs)
         {
             var allowed = slugs.ToList();
@@ -866,6 +890,7 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
     private IQueryable<ChatterEvent> Events(AnalyticsScope scope, string? channel = null, AnalyticsWindow? window = null)
     {
         IQueryable<ChatterEvent> q = db.ChatterEvents.AsNoTracking();
+        if (scope.Platform is { } platform) q = q.Where(e => e.Platform == platform);
         if (scope.Slugs is { } slugs)
         {
             var allowed = slugs.ToList();
@@ -888,6 +913,7 @@ public sealed class ChatAnalyticsService(KickGatewayDbContext db, IOptions<ChatA
     private IQueryable<ChatMention> Mentions(AnalyticsScope scope, string? channel, AnalyticsWindow? window)
     {
         IQueryable<ChatMention> q = db.ChatMentions.AsNoTracking();
+        if (scope.Platform is { } platform) q = q.Where(x => x.Message!.Platform == platform);
         if (scope.Slugs is { } slugs)
         {
             var allowed = slugs.ToList();

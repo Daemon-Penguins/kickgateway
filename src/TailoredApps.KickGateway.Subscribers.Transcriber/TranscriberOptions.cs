@@ -5,14 +5,31 @@ public sealed class TranscriberOptions
 {
     public const string Section = "Transcriber";
 
-    /// <summary>Channel slugs to transcribe (bound broker-side). Empty = every channel on the video exchange.</summary>
+    public const string KickSource = "kick";
+    public const string TwitchSource = "twitch";
+
+    /// <summary>
+    /// Which platform's audio this instance transcribes: <c>kick</c> (default) consumes
+    /// <c>Contracts.Realtime.Media.LiveVideoSegment</c> and publishes <c>LiveTranscript</c>; <c>twitch</c> consumes
+    /// <c>Contracts.Twitch.Media.TwitchAudioSegment</c> and publishes <c>TwitchLiveTranscript</c>. One instance serves
+    /// one platform - run a second container for the other, so either audio path can be stopped alone.
+    /// </summary>
+    public string Source { get; set; } = KickSource;
+
+    public bool IsTwitch => string.Equals(Source?.Trim(), TwitchSource, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Channel slugs (Kick) or logins (Twitch) to transcribe (bound broker-side). Empty = every channel on the exchange.</summary>
     public string[] Channels { get; set; } = [];
 
     /// <summary>
     /// Receive queue name. Change it when running several transcriber instances with different
     /// channel lists — instances sharing a queue would compete for segments and break per-channel order.
+    /// Empty = <c>transcriber</c> for Kick, <c>transcriber-twitch</c> for Twitch.
     /// </summary>
-    public string QueueName { get; set; } = "transcriber";
+    public string QueueName { get; set; } = "";
+
+    /// <summary><see cref="QueueName"/> with the per-source default applied.</summary>
+    public string EffectiveQueueName => string.IsNullOrWhiteSpace(QueueName) ? (IsTwitch ? "transcriber-twitch" : "transcriber") : QueueName.Trim();
 
     /// <summary>
     /// Starting / fallback language (ISO-639-1, e.g. <c>pl</c>): every channel is transcribed in it until the
@@ -211,7 +228,8 @@ public sealed class TranscriberOptions
     /// <summary>Throws with a clear message when the section is inconsistent; called once at startup.</summary>
     public void Validate()
     {
-        if (string.IsNullOrWhiteSpace(QueueName)) throw new ArgumentException("Transcriber:QueueName must not be empty.");
+        var source = (Source ?? "").Trim().ToLowerInvariant();
+        if (source != KickSource && source != TwitchSource) throw new ArgumentException($"Transcriber:Source '{Source}' must be '{KickSource}' or '{TwitchSource}'.");
         if (string.IsNullOrWhiteSpace(Language)) throw new ArgumentException("Transcriber:Language must be a language code or 'auto'.");
         if (!IsAutoLanguage && !IsLanguageCode(Language.Trim().ToLowerInvariant())) throw new ArgumentException($"Transcriber:Language '{Language}' is not an ISO-639-1 code (pl, en, de, ...) or 'auto'.");
         foreach (var code in CandidateLanguages)

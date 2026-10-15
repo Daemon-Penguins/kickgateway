@@ -101,6 +101,21 @@ a subscriber. All durations are seconds; histogram buckets are tuned for ms-leve
 | `kickgateway.realtime.connection.errors` | counter | `reason`, `pusher.code` | Pusher sessions that ended abnormally. `refused` = `pusher:error` 4000-4099, i.e. the app key / cluster is wrong because Kick rotated it (2026-10-15: 4001 "App key ... not in this cluster", every reconnect, zero frames for hours) - fix `KICK_REALTIME_APP_KEY`; `pusher_error` = other codes; `dropped` = socket error; `closed` = by the server. A healthy listener shows a handful of `closed`/`dropped` a day. |
 | `kickgateway.event.delivery_lag` | histogram (s) | `kick.event_type` | **End to end**: the webhook reached the gateway -> the published contract reached a subscriber. Measured on the Api's own live-feed consumer, so it is exactly what a downstream app sees: outbox delivery + RabbitMQ + consume. This is the "does the system react to new messages" number. |
 
+### Twitch side - meter `TailoredApps.TwitchGateway` (`ServiceDefaults/TwitchGatewayMetrics.cs`)
+
+Same idea, own meter name, so `twitchgateway_*` in Prometheus isolates the platform.
+
+| Metric | Type | Tags | Meaning |
+| --- | --- | --- | --- |
+| `twitchgateway.ingest.duration` | histogram (s) | `twitch.event`, `outcome` | EventSub notification (or polled Helix state) received -> inbox row + outbox publish committed, including the queue wait. `twitch.event` = the EventSub type (`channel.chat.message`) or `helix.stream.online` etc. `outcome`: `published`, `duplicate`, `error`. |
+| `twitchgateway.ingest.queue_depth` | gauge | | Events waiting for an ingest worker. |
+| `twitchgateway.ingest.dropped` | counter | `reason` | Events thrown away because a worker's queue was full. Must stay 0. |
+| `twitchgateway.eventsub.session.events` | counter | `reason` | EventSub session lifecycle: `connected`, `reconnect` (Twitch-requested move), `closed`, `keepalive_timeout`, `error`, `revoked`, `subscribe_failed`, `unauthorized` (bot token refused - refreshed automatically; if it keeps coming, reconnect the bot at `/admin/twitch`), `no_token` (no bot connected). |
+| `twitchgateway.eventsub.subscriptions` | gauge | | Enabled chat subscriptions across sessions = channels x enabled types. 0 while the bot token is missing. |
+| `twitchgateway.audio.segments` | counter | `outcome` | Capture: `published`, `ad_skipped` (stitched ad break), `fetch_failed`, `too_large`. |
+| `twitchgateway.audio.captures` | gauge | | Channels whose live audio is being captured right now. |
+| `twitchgateway.event.delivery_lag` | histogram (s) | `twitch.event` | End to end, measured on the Api's Twitch live-feed tap. |
+
 ### MassTransit - meter `MassTransit` (every service)
 
 Built-in instrumentation, enabled in `ServiceDefaults`. The useful ones:
@@ -161,6 +176,10 @@ provisioned rules live in hq-config
 | Realtime ingest backing up | `max(kickgateway_realtime_ingest_queue_depth) > 500` | 2m |
 | **Realtime listener refused by Pusher** (Kick rotated the app key - set `KICK_REALTIME_APP_KEY`, see README) | `sum(increase(kickgateway_realtime_connection_errors_total{reason="refused"}[10m])) > 0` | 0m |
 | Realtime ingest silent (listener up, nothing committed for 15 min - Pusher refusing, roster empty or the sidecar failing) | `(sum(increase(kickgateway_realtime_ingest_duration_seconds_count[15m])) or vector(0)) == 0 and on () (count(target_info{service_name="kickgateway-realtime"}) > 0)` | 10m |
+| **Twitch bot token refused** (reconnect the bot at `/admin/twitch`) | `sum(increase(twitchgateway_eventsub_session_events_total{reason=~"unauthorized|no_token"}[15m])) > 2` | 0m |
+| Twitch EventSub flapping (sessions dropping or failing to subscribe) | `sum(increase(twitchgateway_eventsub_session_events_total{reason=~"error|keepalive_timeout|subscribe_failed"}[15m])) > 10` | 0m |
+| Twitch events dropped or lost | `sum(increase(twitchgateway_ingest_dropped_total[5m])) > 0 or sum(increase(twitchgateway_ingest_duration_seconds_count{outcome="error"}[5m])) > 0` | 0m |
+| Twitch ingest silent (listener up with subscriptions, nothing committed for 15 min) | `(sum(increase(twitchgateway_ingest_duration_seconds_count[15m])) or vector(0)) == 0 and on () (max(twitchgateway_eventsub_subscriptions) > 0)` | 10m |
 | Outbox cannot reach the broker | `sum by (service_name) (increase(messaging_masstransit_outbox_delivery_errors_total[5m])) > 0` | 2m |
 | Api stopped reporting | `absent_over_time(kickgateway_webhook_duration_seconds_count[15m])` (series go stale ~5 min after the last push) | 0m |
 

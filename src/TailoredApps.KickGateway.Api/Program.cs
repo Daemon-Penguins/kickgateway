@@ -17,6 +17,11 @@ using TailoredApps.KickGateway.Contracts.Channels;
 using TailoredApps.KickGateway.Contracts.Events;
 using TailoredApps.KickGateway.Api.Transcripts;
 using TailoredApps.KickGateway.Contracts.Realtime.Media;
+using TailoredApps.Integrations.Twitch;
+using TailoredApps.TwitchGateway.Contracts;
+using TailoredApps.TwitchGateway.Contracts.Channel;
+using TailoredApps.TwitchGateway.Contracts.Chat;
+using TailoredApps.TwitchGateway.Contracts.Media;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -25,6 +30,9 @@ builder.AddServiceDefaults();
 
 // === Kick integration (shared HttpClient + signature verifier) ===
 builder.Services.AddKickIntegration(builder.Configuration);
+
+// === Twitch integration (bot-account OAuth for the listener, Helix for the admin page) ===
+builder.Services.AddTwitchIntegration(builder.Configuration);
 
 // Browser-UA client used by the /admin/realtime "Probe video" diagnostic to test-fetch a
 // channel's live HLS playlist — the same path the realtime listener's capture loop uses.
@@ -120,6 +128,8 @@ builder.Services.AddMassTransit(x =>
     x.AddConsumer<ChannelVideosConsumer>();
     x.AddConsumer<LiveTranscriptConsumer>();
     x.AddConsumer<LiveTranscriptTranslationConsumer>();
+    x.AddConsumer<TwitchLiveTranscriptConsumer>();
+    x.AddConsumer<TwitchLiveFeedConsumer>();
 
     x.UsingRabbitMq((ctx, cfg) =>
     {
@@ -139,6 +149,11 @@ builder.Services.AddMassTransit(x =>
         // transcripts, but the publish topology must match the transcriber so the exchange
         // is a slug-routed topic and BindLiveTranscript below binds to the right thing.
         KickMediaTopology.ConfigurePublishTopology(cfg);
+
+        // Twitch families: declared here for the same reason (the Api only consumes them, but the
+        // exchanges must be login-routed topics for the Bind helpers below).
+        TwitchEventTopology.ConfigurePublishTopology(cfg);
+        TwitchMediaTopology.ConfigurePublishTopology(cfg);
 
         // Live-feed queue: dedicated name + auto-delete + non-durable. Each API
         // replica gets its own queue (queue name suffixed with the host so two
@@ -201,6 +216,32 @@ builder.Services.AddMassTransit(x =>
             UseDbRetry(e);
             KickMediaTopology.BindLiveTranscriptTranslation(e);
             e.ConfigureConsumer<LiveTranscriptTranslationConsumer>(ctx);
+        });
+
+        // Twitch transcripts (the transcriber with Transcriber:Source=twitch) - same table, Platform = twitch.
+        cfg.ReceiveEndpoint("kickgateway-twitch-live-transcripts", e =>
+        {
+            UseDbRetry(e);
+            TwitchMediaTopology.BindTranscript(e);
+            e.ConfigureConsumer<TwitchLiveTranscriptConsumer>(ctx);
+        });
+
+        // Twitch live-feed tap (per replica, auto-delete): end-to-end delivery lag for every Twitch contract.
+        cfg.ReceiveEndpoint($"kickgateway-api-twitch-livefeed-{hostSuffix}", e =>
+        {
+            e.AutoDelete = true;
+            e.Durable = false;
+            TwitchEventTopology.BindTwitchEvent<TwitchChatMessage>(e);
+            TwitchEventTopology.BindTwitchEvent<TwitchChatNotification>(e);
+            TwitchEventTopology.BindTwitchEvent<TwitchChatMessageDeleted>(e);
+            TwitchEventTopology.BindTwitchEvent<TwitchChatCleared>(e);
+            TwitchEventTopology.BindTwitchEvent<TwitchChatUserMessagesCleared>(e);
+            TwitchEventTopology.BindTwitchEvent<TwitchChatSettingsUpdated>(e);
+            TwitchEventTopology.BindTwitchEvent<TwitchStreamOnline>(e);
+            TwitchEventTopology.BindTwitchEvent<TwitchStreamOffline>(e);
+            TwitchEventTopology.BindTwitchEvent<TwitchChannelUpdated>(e);
+            TwitchEventTopology.BindTwitchEvent<TwitchEventUnknown>(e);
+            e.ConfigureConsumer<TwitchLiveFeedConsumer>(ctx);
         });
 
         // No ConfigureEndpoints — we've declared the only consumer explicitly,
@@ -275,6 +316,9 @@ app.MapObsClipsEndpoints();
 // Admin SSO endpoints — public by definition (login/callback/logout).
 app.MapAdminAuthEndpoints();
 
+// Twitch bot-account OAuth callback — anonymous like the Kick broadcaster callback (the sealed state is the proof).
+app.MapTwitchAuthCallback();
+
 // Dev-only local sign-in — bypasses Kick OAuth for local work + manual testing.
 // Mapped ONLY in Development; never exists in Production.
 if (app.Environment.IsDevelopment())
@@ -290,6 +334,7 @@ admin.MapBroadcasterEndpoints();
 admin.MapOAuthEndpoints();
 admin.MapSubscriptionEndpoints();
 admin.MapAdminUserEndpoints();   // per-route SuperAdminOnly policy inside
+admin.MapTwitchAuthEndpoints();  // SuperAdmin check inside
 
 // Chat analytics — own policy (admin cookie OR analytics API key), per-channel scoping inside.
 app.MapAnalyticsEndpoints();

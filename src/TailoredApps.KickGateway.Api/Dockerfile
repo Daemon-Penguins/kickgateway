@@ -5,14 +5,18 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 COPY src/TailoredApps.Integrations.Kick/TailoredApps.Integrations.Kick.csproj      src/TailoredApps.Integrations.Kick/
+COPY src/TailoredApps.Integrations.Twitch/TailoredApps.Integrations.Twitch.csproj  src/TailoredApps.Integrations.Twitch/
 COPY src/TailoredApps.KickGateway.Contracts/TailoredApps.KickGateway.Contracts.csproj src/TailoredApps.KickGateway.Contracts/
+COPY src/TailoredApps.TwitchGateway.Contracts/TailoredApps.TwitchGateway.Contracts.csproj src/TailoredApps.TwitchGateway.Contracts/
 COPY src/TailoredApps.KickGateway.Data/TailoredApps.KickGateway.Data.csproj        src/TailoredApps.KickGateway.Data/
 COPY src/TailoredApps.KickGateway.ServiceDefaults/TailoredApps.KickGateway.ServiceDefaults.csproj src/TailoredApps.KickGateway.ServiceDefaults/
 COPY src/TailoredApps.KickGateway.Api/TailoredApps.KickGateway.Api.csproj          src/TailoredApps.KickGateway.Api/
 RUN dotnet restore src/TailoredApps.KickGateway.Api/TailoredApps.KickGateway.Api.csproj
 
 COPY src/TailoredApps.Integrations.Kick/      src/TailoredApps.Integrations.Kick/
+COPY src/TailoredApps.Integrations.Twitch/    src/TailoredApps.Integrations.Twitch/
 COPY src/TailoredApps.KickGateway.Contracts/  src/TailoredApps.KickGateway.Contracts/
+COPY src/TailoredApps.TwitchGateway.Contracts/ src/TailoredApps.TwitchGateway.Contracts/
 COPY src/TailoredApps.KickGateway.Data/       src/TailoredApps.KickGateway.Data/
 COPY src/TailoredApps.KickGateway.ServiceDefaults/ src/TailoredApps.KickGateway.ServiceDefaults/
 COPY src/TailoredApps.KickGateway.Api/        src/TailoredApps.KickGateway.Api/

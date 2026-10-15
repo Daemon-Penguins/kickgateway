@@ -1,0 +1,62 @@
+name: 📦 Publish Twitch Contracts NuGet package
+
+# Builds and publishes TailoredApps.TwitchGateway.Contracts to GitHub Packages on every push to main
+# that touches the Twitch contracts project. Separate from the Kick package on purpose: a subscriber
+# references the platform it consumes, and the two version independently.
+#
+# Version scheme: 0.1.<github.run_number> (monotonic per workflow).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/TailoredApps.TwitchGateway.Contracts/**'
+      - '.github/workflows/publish-twitch-contracts.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: publish-twitch-contracts-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Pack & push to GitHub Packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VERSION: 0.1.${{ github.run_number }}
+      PROJECT: src/TailoredApps.TwitchGateway.Contracts/TailoredApps.TwitchGateway.Contracts.csproj
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+
+      - name: Restore
+        run: dotnet restore ${{ env.PROJECT }}
+
+      - name: Build
+        run: dotnet build ${{ env.PROJECT }} -c Release --no-restore -p:Version=${{ env.VERSION }}
+
+      - name: Pack
+        run: dotnet pack ${{ env.PROJECT }} -c Release --no-build -o ./out -p:Version=${{ env.VERSION }}
+
+      - name: Push to GitHub Packages
+        run: |
+          dotnet nuget push "./out/*.nupkg" \
+            --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
+            --api-key "${{ secrets.GITHUB_TOKEN }}" \
+            --skip-duplicate
+
+      - name: Summary
+        run: |
+          echo "## Published version" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "TailoredApps.TwitchGateway.Contracts ${{ env.VERSION }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

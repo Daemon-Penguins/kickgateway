@@ -17,6 +17,11 @@ public class KickGatewayDbContext : DbContext
     public DbSet<AdminUser> AdminUsers => Set<AdminUser>();
     public DbSet<AdminUserRole> AdminUserRoles => Set<AdminUserRole>();
 
+    // Twitch side: the listener's roster, the bot account whose token EventSub uses, and the Twitch inbox.
+    public DbSet<TwitchChannel> TwitchChannels => Set<TwitchChannel>();
+    public DbSet<TwitchBotAccount> TwitchBotAccounts => Set<TwitchBotAccount>();
+    public DbSet<ReceivedTwitchEvent> ReceivedTwitchEvents => Set<ReceivedTwitchEvent>();
+
     // Chat-analytics read model (projected from ReceivedWebhooks + ReceivedRealtimeEvents by the Api).
     public DbSet<ChatMessageRecord> ChatMessages => Set<ChatMessageRecord>();
     public DbSet<ChatMention> ChatMentions => Set<ChatMention>();
@@ -108,6 +113,29 @@ public class KickGatewayDbContext : DbContext
             b.HasIndex(x => x.Slug);
         });
 
+        modelBuilder.Entity<TwitchChannel>(b =>
+        {
+            b.HasKey(x => x.Id);
+            b.HasIndex(x => x.Login).IsUnique();
+            b.HasIndex(x => x.UserId);
+            b.Property(x => x.IsEnabled).HasDefaultValue(true);
+            b.Property(x => x.CaptureChat).HasDefaultValue(true);
+            b.Property(x => x.CaptureAudio).HasDefaultValue(false);
+        });
+
+        modelBuilder.Entity<TwitchBotAccount>(b =>
+        {
+            b.HasKey(x => x.Id);
+            b.HasIndex(x => x.UserId).IsUnique();
+        });
+
+        modelBuilder.Entity<ReceivedTwitchEvent>(b =>
+        {
+            b.HasKey(x => x.DedupeKey);
+            b.HasIndex(x => x.ReceivedAt);
+            b.HasIndex(x => x.BroadcasterLogin);
+        });
+
         modelBuilder.Entity<AdminUser>(b =>
         {
             b.HasKey(x => x.Id);
@@ -160,6 +188,8 @@ public class KickGatewayDbContext : DbContext
         modelBuilder.Entity<ChatMessageRecord>(b =>
         {
             b.HasKey(x => x.MessageId);
+            // Every pre-Twitch row is Kick; the projectors set the column explicitly from now on.
+            b.Property(x => x.Platform).HasDefaultValue(ChatPlatforms.Kick);
             // Channel windows (overview, graph, transcript).
             b.HasIndex(x => new { x.ChannelSlug, x.CreatedAt });
             // Per-chatter aggregates inside a channel (first seen, new vs returning).
@@ -186,6 +216,7 @@ public class KickGatewayDbContext : DbContext
         modelBuilder.Entity<ChatterEvent>(b =>
         {
             b.HasKey(x => x.Id);
+            b.Property(x => x.Platform).HasDefaultValue(ChatPlatforms.Kick);
             b.HasIndex(x => new { x.UserId, x.OccurredAt });
             b.HasIndex(x => new { x.CounterpartUserId, x.OccurredAt });
             b.HasIndex(x => new { x.ChannelSlug, x.OccurredAt });
@@ -198,6 +229,7 @@ public class KickGatewayDbContext : DbContext
         modelBuilder.Entity<LiveTranscriptRecord>(b =>
         {
             b.HasKey(x => x.Id);
+            b.Property(x => x.Platform).HasDefaultValue(ChatPlatforms.Kick);
             // Redelivery / replica race guard (the consumer checks it first, the index enforces it).
             b.HasIndex(x => x.DedupeKey).IsUnique();
             // Channel timelines and joins with chat by time window.
@@ -208,6 +240,7 @@ public class KickGatewayDbContext : DbContext
         modelBuilder.Entity<LiveTranscriptTranslationRecord>(b =>
         {
             b.HasKey(x => x.Id);
+            b.Property(x => x.Platform).HasDefaultValue(ChatPlatforms.Kick);
             // One translation per slice and target language (the consumer checks first, the index enforces it).
             b.HasIndex(x => new { x.TranscriptDedupeKey, x.TargetLanguage }).IsUnique();
             b.HasIndex(x => new { x.ChannelSlug, x.StartedAt });

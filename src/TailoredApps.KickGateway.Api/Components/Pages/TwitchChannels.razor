@@ -1,0 +1,265 @@
+@page "/admin/twitch"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Policy = TailoredApps.KickGateway.Api.Auth.AdminPolicies.SuperAdminOnly)]
+@using Microsoft.Extensions.Options
+@using TailoredApps.Integrations.Twitch
+@using TailoredApps.Integrations.Twitch.Auth
+@using TailoredApps.Integrations.Twitch.Helix
+@inject IDbContextFactory<KickGatewayDbContext> DbFactory
+@inject ITwitchHelixClient Helix
+@inject ITwitchAuthClient Auth
+@inject IOptions<TwitchOptions> Twitch
+
+<h1>Twitch channels</h1>
+<p class="muted">
+    Channels the Twitch listener follows (EventSub chat with the gateway's <strong>bot account</strong>, stream state from
+    Helix) and whose live audio the Twitch capture pulls for the Twitch transcriber. Only a public <strong>login</strong> is
+    needed: no broadcaster consent, no OAuth per channel. SuperAdmin only.
+</p>
+
+@if (!string.IsNullOrEmpty(_error))
+{
+    <div class="card" style="border-color:#c04040;">
+        <strong style="color:#f0b3b3;">@_error</strong>
+    </div>
+}
+
+<div class="card">
+    <h3>Bot account</h3>
+    @if (!Twitch.Value.IsConfigured)
+    {
+        <p class="muted">The Twitch developer application is not configured (<code>Twitch:ClientId</code> / <code>Twitch:ClientSecret</code>, repo secrets <code>TWITCH_CLIENT_ID</code> / <code>TWITCH_CLIENT_SECRET</code>). EventSub chat needs it; audio capture works without it.</p>
+    }
+    else if (_bot is null)
+    {
+        <p class="muted">No bot account connected. The listener reads chat with this account's token (<code>@Twitch.Value.BotScopes</code>). Any Twitch account works; a dedicated one is cleaner.</p>
+        <a class="button" href="/api/auth/twitch/start">Connect bot account</a>
+    }
+    else
+    {
+        <p>
+            <strong>@_bot.Login</strong> <span class="muted">(id @_bot.UserId)</span>
+            @(_bot.IsEnabled ? new MarkupString("<span class='pill green'>enabled</span>") : new MarkupString("<span class='pill red'>disabled</span>"))
+            <br /><span class="muted">scopes: @_bot.Scopes</span>
+            <br /><span class="muted">token expires @_bot.AccessTokenExpiresAt.ToString("u"), last refresh @(_bot.LastRefreshedAt?.ToString("u") ?? "never"), last validation @(_bot.LastValidatedAt?.ToString("u") ?? "never")</span>
+            @if (!string.IsNullOrEmpty(_bot.LastError))
+            {
+                <br /><span style="color:#f0b3b3;">@_bot.LastError</span>
+            }
+        </p>
+        <a class="button secondary" href="/api/auth/twitch/start">Reconnect</a>
+        <button class="secondary" @onclick="ToggleBot">@(_bot.IsEnabled ? "Disable" : "Enable")</button>
+        <button class="danger" @onclick="DisconnectBot">Disconnect</button>
+    }
+</div>
+
+<div class="card">
+    <h3>Add a channel</h3>
+    <div style="display:flex;gap:1rem;align-items:flex-end;flex-wrap:wrap;">
+        <label style="margin:0;"><span class="muted">Twitch login</span><br />
+            <input placeholder="e.g. forsen" @bind="_newLogin" @bind:event="oninput" />
+        </label>
+        <label style="margin:0;"><span class="muted">Display name (optional)</span><br />
+            <input placeholder="friendly label" @bind="_newName" @bind:event="oninput" />
+        </label>
+        <button @onclick="Add">Add channel</button>
+    </div>
+    <p class="muted" style="margin-bottom:0;">The login is the last path segment of a Twitch channel URL (<code>twitch.tv/<strong>login</strong></code>). Added enabled with chat on; audio capture is off until you turn it on (and the capture service's global switch is on).</p>
+</div>
+
+<div class="card">
+    <h3>Channels</h3>
+    @if (_rows is null)
+    {
+        <p>Loading...</p>
+    }
+    else if (_rows.Count == 0)
+    {
+        <p class="muted">None yet. Add one above.</p>
+    }
+    else
+    {
+        <div class="table-scroll">
+        <table>
+            <thead>
+                <tr><th>Channel</th><th>Resolved</th><th>Status</th><th>Capture</th><th></th></tr>
+            </thead>
+            <tbody>
+            @foreach (var c in _rows)
+            {
+                <tr>
+                    <td>
+                        <strong>@(string.IsNullOrWhiteSpace(c.DisplayName) ? c.Login : c.DisplayName)</strong>
+                        <br /><span class="muted">@c.Login</span>
+                    </td>
+                    <td>
+                        @if (!string.IsNullOrEmpty(c.UserId))
+                        {
+                            <span class="muted">user @c.UserId</span><br />
+                            <span class="muted">@(c.LastResolvedAt is { } r ? $"resolved {r:u}" : "")</span>
+                        }
+                        else
+                        {
+                            <span class="muted">not resolved - Verify (the listener also resolves on its next refresh)</span>
+                        }
+                    </td>
+                    <td>
+                        @(c.IsEnabled
+                            ? new MarkupString("<span class='pill green'>enabled</span>")
+                            : new MarkupString("<span class='pill red'>disabled</span>"))
+                        @if (_verify.TryGetValue(c.Id, out var v))
+                        {
+                            <br /><span class="muted">@v</span>
+                        }
+                    </td>
+                    <td>
+                        <button class="secondary" @onclick="() => Toggle(c.Id, x => x.CaptureChat = !x.CaptureChat)"
+                                title="EventSub channel.chat.* subscriptions (messages, notices, deletions, clears)">
+                            Chat: @(c.CaptureChat ? "on" : "off")
+                        </button>
+                        <button class="secondary" @onclick="() => Toggle(c.Id, x => x.CaptureAudio = !x.CaptureAudio)"
+                                title="Pull the audio_only HLS rendition while live and publish TwitchAudioSegment for the Twitch transcriber. Needs the capture service's Twitch:Capture:Enabled.">
+                            Audio: @(c.CaptureAudio ? "on" : "off")
+                        </button>
+                    </td>
+                    <td>
+                        <button @onclick="() => Verify(c.Id)">Verify</button>
+                        <button class="secondary" @onclick="() => Toggle(c.Id, x => x.IsEnabled = !x.IsEnabled)">
+                            @(c.IsEnabled ? "Disable" : "Enable")
+                        </button>
+                        <button class="danger" @onclick="() => Delete(c.Id)">Delete</button>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+        </div>
+        <p class="muted">Changes take effect on the listener's / capture's next roster refresh (within ~30 s).</p>
+    }
+</div>
+
+@code {
+    List<TwitchChannel>? _rows;
+    TwitchBotAccount? _bot;
+    string? _newLogin;
+    string? _newName;
+    string? _error;
+
+    readonly Dictionary<Guid, string> _verify = new();
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    async Task Reload()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _rows = await db.TwitchChannels.OrderBy(x => x.Login).ToListAsync();
+        _bot = await db.TwitchBotAccounts.OrderBy(b => b.CreatedAt).FirstOrDefaultAsync();
+    }
+
+    async Task Add()
+    {
+        _error = null;
+        var login = (_newLogin ?? "").Trim().ToLowerInvariant().TrimStart('@');
+        if (string.IsNullOrWhiteSpace(login)) { _error = "Enter a login."; return; }
+        if (login.Contains('/') || login.Contains(' ')) { _error = "Enter just the login, not a URL."; return; }
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.TwitchChannels.AnyAsync(c => c.Login == login))
+        {
+            _error = $"'{login}' is already added.";
+            return;
+        }
+
+        db.TwitchChannels.Add(new TwitchChannel
+        {
+            Login = login,
+            DisplayName = string.IsNullOrWhiteSpace(_newName) ? null : _newName!.Trim(),
+        });
+        await db.SaveChangesAsync();
+        _newLogin = "";
+        _newName = "";
+        await Reload();
+
+        var added = _rows?.FirstOrDefault(x => x.Login == login);
+        if (added is not null) await Verify(added.Id);
+    }
+
+    async Task Toggle(Guid id, Action<TwitchChannel> apply)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var row = await db.TwitchChannels.FindAsync(id);
+        if (row is null) return;
+        apply(row);
+        row.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        await Reload();
+    }
+
+    // Resolve the login via Helix (app token, or the bot's token when no app token is available) and
+    // say whether the channel is live right now.
+    async Task Verify(Guid id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var row = await db.TwitchChannels.FindAsync(id);
+        if (row is null) return;
+        try
+        {
+            var token = await TokenAsync(db);
+            if (token is null) { _verify[id] = "no Twitch token (configure the app or connect the bot)"; return; }
+            var users = await Helix.GetUsersByLoginAsync(token, [row.Login], CancellationToken.None);
+            var u = users.FirstOrDefault();
+            if (u is null) { _verify[id] = "login not found on Twitch"; return; }
+            row.UserId = u.Id;
+            row.DisplayName ??= u.DisplayName;
+            row.LastResolvedAt = DateTime.UtcNow;
+            row.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+            var streams = await Helix.GetStreamsAsync(token, [u.Id], CancellationToken.None);
+            var s = streams.FirstOrDefault();
+            _verify[id] = s is null ? "offline" : $"LIVE - {s.ViewerCount} viewers - {s.GameName} - {s.Title}";
+        }
+        catch (Exception ex)
+        {
+            _verify[id] = "verify failed: " + ex.Message;
+        }
+        await Reload();
+    }
+
+    async Task<string?> TokenAsync(KickGatewayDbContext db)
+    {
+        var app = Twitch.Value.IsConfigured ? await Auth.GetAppAccessTokenAsync(CancellationToken.None) : null;
+        if (app is not null) return app;
+        var bot = await db.TwitchBotAccounts.FirstOrDefaultAsync(b => b.IsEnabled);
+        return bot is not null && bot.AccessTokenExpiresAt > DateTime.UtcNow ? bot.AccessToken : null;
+    }
+
+    async Task Delete(Guid id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var row = await db.TwitchChannels.FindAsync(id);
+        if (row is null) return;
+        db.TwitchChannels.Remove(row);
+        await db.SaveChangesAsync();
+        _verify.Remove(id);
+        await Reload();
+    }
+
+    async Task ToggleBot()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var bot = await db.TwitchBotAccounts.OrderBy(b => b.CreatedAt).FirstOrDefaultAsync();
+        if (bot is null) return;
+        bot.IsEnabled = !bot.IsEnabled;
+        bot.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync();
+        await Reload();
+    }
+
+    async Task DisconnectBot()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var bots = await db.TwitchBotAccounts.ToListAsync();
+        db.TwitchBotAccounts.RemoveRange(bots);
+        await db.SaveChangesAsync();
+        await Reload();
+    }
+}
