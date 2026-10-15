@@ -446,6 +446,13 @@ Whisper model cache and the GPU are shared. It needs `TWITCH_AUDIO_ENABLED=true`
 `twitch-capture` container is the only audio source) and `TWITCH_TRANSCRIBER_ENABLED` off - again one
 transcriber per channel.
 
+Several agents per platform (`TRANSCRIBER_INSTANCE=kick-a`, `kick-b`, `twitch-a`, ...; the platform is
+the name's prefix, each gets its own queue `transcriber-<instance>`) work only with **disjoint**
+`Transcriber__Channels__N` lists in their env files - an agent without a list binds every channel of its
+platform and doubles every sentence, and that includes the unnamed default agent. The GPU is shared, so
+expect a modest gain from the parallel Whisper processes, not a multiple; check the per-chunk timings in
+the log first.
+
 ### On-demand channel stats
 
 Subscribers can also ask the gateway for a channel's **live stats** (viewer

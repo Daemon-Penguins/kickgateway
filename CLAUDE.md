@@ -219,7 +219,9 @@ Status: actively developed.
   disabled-profile containers that are still running). Measured on the VPS: `LargeV3Turbo` at
   ~0.5x real time -> most chunks dropped, so the intended production host is a GPU box (e.g. a
   Mac mini M2 via Metal - `deploy/macos/install-transcriber.sh` installs a launchd user agent,
-  `TRANSCRIBER_INSTANCE=twitch` a second one for the Twitch queue next to it;
+  `TRANSCRIBER_INSTANCE=twitch` a second one for the Twitch queue next to it, `kick-b` /
+  `twitch-b` more agents per platform (own queue each, disjoint `Channels` lists or every
+  sentence is stored twice);
   Whisper.net's base runtime is Metal-enabled on osx-arm64, no code changes). **Exactly one
   transcriber per channel**: `DedupeKey` is built from the per-process audio clock, so two
   producers store every sentence twice. Model via `TRANSCRIBER_MODEL` (default `LargeV3Turbo`),
