@@ -17,6 +17,9 @@ namespace TailoredApps.KickGateway.Api.Endpoints;
 /// </summary>
 public static class TwitchAuthEndpoints
 {
+    /// <summary>Path of the OAuth callback; the Twitch console must list <c>{public origin}{CallbackPath}</c> exactly.</summary>
+    public const string CallbackPath = "/api/auth/twitch/callback";
+
     private const string StateProtectorPurpose = "twitch-bot-oauth-state";
     private static readonly TimeSpan StateLifetime = TimeSpan.FromMinutes(10);
 
@@ -46,7 +49,7 @@ public static class TwitchAuthEndpoints
     /// <summary>Anonymous callback - the admin cookie may be gone after Twitch's consent page; the sealed state is the proof.</summary>
     public static IEndpointRouteBuilder MapTwitchAuthCallback(this IEndpointRouteBuilder routes)
     {
-        routes.MapGet("/api/auth/twitch/callback", async (
+        routes.MapGet(CallbackPath, async (
             HttpContext http,
             string? code,
             string? state,
@@ -109,5 +112,6 @@ public static class TwitchAuthEndpoints
         return routes;
     }
 
-    private static string RedirectUri(HttpContext http) => $"{http.Request.Scheme}://{http.Request.Host}/api/auth/twitch/callback";
+    /// <summary>Scheme + host come from the request (X-Forwarded-Proto is honoured by the pipeline), so this is the public URL.</summary>
+    private static string RedirectUri(HttpContext http) => $"{http.Request.Scheme}://{http.Request.Host}{CallbackPath}";
 }

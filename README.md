@@ -278,7 +278,7 @@ push) returns to the pipeline-managed version.
 | `SUBTITLES_RELAY_TOKEN` | Optional. Enables the delayed player (`/{slug}/player?token=…`): at least 16 random characters. Empty = relay off, the public iframe page still works. |
 | `TRANSLATOR_API_KEY` | Optional (with `TRANSLATOR_ENABLED`). DeepL / Anthropic key; not needed for a local Ollama via `openai`. |
 | `KICK_WEBHOOK_URL` | Full webhook URL Kick will POST to (`https://example.com/api/webhooks/kick`) |
-| `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` | Optional (Twitch side). A Twitch developer application (dev.twitch.tv/console/apps, client type **Confidential**, OAuth redirect URL `https://${PUBLIC_HOST}/api/auth/twitch/callback`). Used by the api for the bot-account OAuth + Helix lookups and by `twitch-listener` for EventSub. The capture works without it. |
+| `TWITCH_CLIENT_ID` / `TWITCH_CLIENT_SECRET` | Optional (Twitch side). A Twitch developer application (dev.twitch.tv/console/apps, client type **Confidential**, OAuth redirect URL `https://${PUBLIC_HOST}/api/auth/twitch/callback` - `/admin/twitch` shows the exact string; Twitch answers `redirect_mismatch` on any difference, scheme included). Used by the api for the bot-account OAuth + Helix lookups and by `twitch-listener` for EventSub. The capture works without it. |
 | `DB_CONNECTION_STRING` | `Server=…,1433;Database=kickgateway;User Id=…;Password=…;TrustServerCertificate=true;Encrypt=false` |
 | `RABBITMQ_HOST` / `RABBITMQ_PORT` / `RABBITMQ_VHOST` / `RABBITMQ_USERNAME` / `RABBITMQ_PASSWORD` | broker (private vhost recommended) |
 | `SEED_SUPERADMIN_USERNAME` | Kick handle (lowercase) of the first super-admin. Used only on first deploy; ignored thereafter. |

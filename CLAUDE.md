@@ -385,6 +385,11 @@ TailoredApps.KickGateway.slnx
   **Development environment only** — the endpoint is not mapped and self-guards
   (404) otherwise, and the auth cookie's `Secure` requirement is relaxed to
   `SameAsRequest` in dev so it works over plain-http localhost.
+- OAuth redirect URIs (Kick admin login, Twitch bot connect) are derived from
+  the incoming request's scheme + host. TLS terminates at Traefik, so the Api
+  runs `UseForwardedHeaders` (X-Forwarded-Proto/-For, known proxies cleared -
+  the container is only reachable on the compose network) first in the
+  pipeline; without it prod sent `redirect_uri=http://...` (2026-10-15).
 - Production hostname, Docker Hub namespace, SSH target, broker credentials
   are all referenced via `${{ secrets.* }}` / `${{ vars.* }}` in
   `.github/workflows/deploy.yml`. Nothing identifying is committed. The production
