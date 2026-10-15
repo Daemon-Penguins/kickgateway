@@ -8,6 +8,7 @@
 @inject ITwitchHelixClient Helix
 @inject ITwitchAuthClient Auth
 @inject IOptions<TwitchOptions> Twitch
+@inject NavigationManager Nav
 
 <h1>Twitch channels</h1>
 <p class="muted">
@@ -32,6 +33,7 @@
     else if (_bot is null)
     {
         <p class="muted">No bot account connected. The listener reads chat with this account's token (<code>@Twitch.Value.BotScopes</code>). Any Twitch account works; a dedicated one is cleaner.</p>
+        <p class="muted">The developer application's <strong>OAuth Redirect URL</strong> (dev.twitch.tv/console/apps) must be exactly <code>@CallbackUrl</code> - Twitch answers <code>redirect_mismatch</code> otherwise.</p>
         <a class="button" href="/api/auth/twitch/start">Connect bot account</a>
     }
     else
@@ -46,6 +48,7 @@
                 <br /><span style="color:#f0b3b3;">@_bot.LastError</span>
             }
         </p>
+        <p class="muted">OAuth Redirect URL registered for the application: <code>@CallbackUrl</code></p>
         <a class="button secondary" href="/api/auth/twitch/start">Reconnect</a>
         <button class="secondary" @onclick="ToggleBot">@(_bot.IsEnabled ? "Disable" : "Enable")</button>
         <button class="danger" @onclick="DisconnectBot">Disconnect</button>
@@ -145,6 +148,9 @@
     string? _error;
 
     readonly Dictionary<Guid, string> _verify = new();
+
+    /// <summary>What <c>/api/auth/twitch/start</c> sends as <c>redirect_uri</c>: the public origin (as the browser sees it) + the callback path.</summary>
+    string CallbackUrl => new Uri(new Uri(Nav.BaseUri), TailoredApps.KickGateway.Api.Endpoints.TwitchAuthEndpoints.CallbackPath).ToString();
 
     protected override async Task OnInitializedAsync() => await Reload();
 

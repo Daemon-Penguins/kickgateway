@@ -1,6 +1,7 @@
 using MassTransit;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using TailoredApps.Integrations.Kick;
 using TailoredApps.KickGateway.Api.Analytics;
@@ -288,6 +289,15 @@ using (var scope = app.Services.CreateScope())
         }
     }
 }
+
+// Behind Traefik (TLS terminated at the proxy) the Api receives plain http, so without this every
+// request-derived absolute URL - the OAuth redirect_uri sent to Kick/Twitch, cookie policies, Blazor's
+// base URI - is built with the wrong scheme (verified 2026-10-15: prod sent redirect_uri=http://...).
+// Trust X-Forwarded-Proto/-For from any peer: the container is reachable only on the docker network.
+var forwarded = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto };
+forwarded.KnownIPNetworks.Clear(); // defaults = loopback only, which Traefik on the compose network is not
+forwarded.KnownProxies.Clear();
+app.UseForwardedHeaders(forwarded);
 
 if (app.Environment.IsDevelopment())
 {
