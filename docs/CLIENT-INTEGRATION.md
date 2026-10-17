@@ -572,6 +572,19 @@ public async Task Consume(ConsumeContext<ChatMessageSent> ctx)
 
 ---
 
+## Sizing your columns
+
+Contract strings are Kick's values verbatim - the gateway does not shorten them. In
+particular Kick does **not** bound the usernames of legacy accounts: a real account (user id
+201440) has a username of more than 120 characters (seen 2026-10-16), and a consumer that
+stored `SenderUsername` in an `nvarchar(120)` column faulted on every one of its messages
+(`String or binary data would be truncated`). Store usernames unbounded or cut them on write -
+and cut them *before* any query that compares usernames, so you compare what you stored. The
+gateway's own read model cuts them to 120. Bounded by construction: the realtime `DedupeKey`
+(at most 200 characters) and the webhook `KickMessageId` (Kick's delivery id).
+
+---
+
 ## Picking a queue name
 
 Your `ReceiveEndpoint` name is your app's identity on the broker. Use
