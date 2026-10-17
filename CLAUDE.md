@@ -236,6 +236,10 @@ Status: actively developed.
   for non-chat events and Pusher only adds realtime-only kinds (deletions, unbans).
   All Kick JSON knowledge stays in `ChatProjectionMapper` / `RealtimeChatProjectionMapper`;
   graph/profile logic is pure (`InteractionGraph`, `Louvain`, `ChatTextStats`).
+  Every Kick-sourced string is cut to its column on the way in (`Cap`/`NCap`, usernames 120):
+  Kick does not bound the usernames of legacy accounts (user 201440 has 120+ chars, seen
+  2026-10-16), and a downstream consumer that stored `SenderUsername` uncut faulted on every
+  message of that user - the sizing rule for client apps is in `docs/CLIENT-INTEGRATION.md`.
   `/api/analytics/*` is read-only and scoped per client-app role; it also accepts
   `Analytics:ApiKey` (Bearer / `X-Api-Key`) — and ONLY those endpoints do. Their queries
   run in a READ UNCOMMITTED transaction (`AnalyticsRequestFilter`) so analytics reads can

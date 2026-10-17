@@ -203,6 +203,21 @@ public class ChatProjectionMapperTests
     [InlineData("@a", null, new string[0])]
     public void Extract_mentions(string content, string? sender, string[] expected) =>
         Assert.Equal(expected, ChatProjectionMapper.ExtractMentions(content, sender));
+
+    [Fact]
+    public void Legacy_long_username_is_cut_to_the_column()
+    {
+        // Kick does not bound the usernames of legacy accounts (user 201440: 120+ chars); the columns are nvarchar(120).
+        var name = string.Concat(Enumerable.Repeat("orkownia", 17)); // 136 chars
+        var body = $$"""
+        { "message_id": "msg-9", "broadcaster": { "user_id": 1000, "username": "Streamer", "channel_slug": "streamer" },
+          "sender": { "is_anonymous": false, "user_id": 201440, "username": "{{name}}", "channel_slug": "x", "identity": null },
+          "content": "HOLAK To Krol", "emotes": [], "created_at": "2026-09-01T18:00:03Z" }
+        """;
+        var m = Assert.Single(ChatProjectionMapper.Map(Row(KickEventTypes.ChatMessageSent, body), knownSlug: null).Messages);
+        Assert.Equal(name[..120], m.SenderUsername);
+        Assert.Equal("201440", m.SenderUserId);
+    }
 }
 
 public class RealtimeChatProjectionMapperTests
@@ -278,5 +293,19 @@ public class RealtimeChatProjectionMapperTests
     {
         Assert.Same(ChatProjection.Empty, RealtimeChatProjectionMapper.Map(Row("PollUpdateEvent", """{ "poll": {} }"""), false));
         Assert.Same(ChatProjection.Empty, RealtimeChatProjectionMapper.Map(Row("ChatMessageEvent", "{oops"), false));
+    }
+
+    [Fact]
+    public void Legacy_long_username_is_cut_to_the_column()
+    {
+        // Same legacy account on the Pusher transport - the same 120-char cut as the webhook projector.
+        var name = string.Concat(Enumerable.Repeat("orkownia", 17)); // 136 chars
+        var data = $$"""
+        { "id": "uuid-9", "chatroom_id": 5, "content": "HOLAK To Krol", "type": "message", "created_at": "2026-09-01T18:00:01+00:00",
+          "sender": { "id": 201440, "username": "{{name}}", "slug": "x", "identity": { "color": "#fff", "badges": [] } } }
+        """;
+        var m = Assert.Single(RealtimeChatProjectionMapper.Map(Row("ChatMessageEvent", data), webhookCoversChannel: false).Messages);
+        Assert.Equal(name[..120], m.SenderUsername);
+        Assert.Equal("201440", m.SenderUserId);
     }
 }
