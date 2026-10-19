@@ -1,4 +1,5 @@
 using MassTransit;
+using TailoredApps.KickGateway.Api.Data;
 using TailoredApps.KickGateway.Telemetry;
 using TailoredApps.TwitchGateway.Contracts;
 using TailoredApps.TwitchGateway.Contracts.Channel;
@@ -9,7 +10,8 @@ namespace TailoredApps.KickGateway.Api.LiveFeed;
 /// <summary>
 /// The Api's own tap on the Twitch exchanges (auto-delete, per-replica queue): measures the end-to-end
 /// delivery lag of every Twitch contract (<c>twitchgateway.event.delivery_lag</c>) exactly as a downstream
-/// subscriber would see it. The admin live feed stays Kick-only for now; this consumer only records the metric.
+/// subscriber would see it, and feeds chat messages to the public landing page's <see cref="HomeFeed"/>.
+/// The admin live feed stays Kick-only for now.
 /// </summary>
 public sealed class TwitchLiveFeedConsumer :
     IConsumer<TwitchChatMessage>,
@@ -23,7 +25,25 @@ public sealed class TwitchLiveFeedConsumer :
     IConsumer<TwitchChannelUpdated>,
     IConsumer<TwitchEventUnknown>
 {
-    public Task Consume(ConsumeContext<TwitchChatMessage> c) => Record(c.Message);
+    private readonly HomeFeed _home;
+
+    public TwitchLiveFeedConsumer(HomeFeed home) { _home = home; }
+
+    public Task Consume(ConsumeContext<TwitchChatMessage> c)
+    {
+        var m = c.Message;
+        _home.Append(new HomeFeedEntry(
+            HomeFeedKind.Chat,
+            ChatPlatforms.Twitch,
+            m.BroadcasterLogin,
+            m.ChatterName.Length > 0 ? m.ChatterName : m.ChatterLogin,
+            ChatBadgeLabels.FromTwitch(m.Badges),
+            m.Text,
+            m.Color,
+            HomeFeed.ChatKey(ChatPlatforms.Twitch, m.ChatMessageId)));
+        return Record(m);
+    }
+
     public Task Consume(ConsumeContext<TwitchChatNotification> c) => Record(c.Message);
     public Task Consume(ConsumeContext<TwitchChatMessageDeleted> c) => Record(c.Message);
     public Task Consume(ConsumeContext<TwitchChatCleared> c) => Record(c.Message);

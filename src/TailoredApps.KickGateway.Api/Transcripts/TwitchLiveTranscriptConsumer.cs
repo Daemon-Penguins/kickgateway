@@ -2,6 +2,7 @@ using MassTransit;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using TailoredApps.KickGateway.Api.Data;
+using TailoredApps.KickGateway.Api.LiveFeed;
 using TailoredApps.KickGateway.Contracts.Realtime.Media;
 using TailoredApps.TwitchGateway.Contracts.Media;
 
@@ -11,16 +12,18 @@ namespace TailoredApps.KickGateway.Api.Transcripts;
 /// Persists every <see cref="TwitchLiveTranscript"/> (the Twitch transcriber's output) into the same
 /// <see cref="KickGatewayDbContext.LiveTranscripts"/> table with <c>Platform = twitch</c> and a platform-prefixed
 /// dedupe key, so the timeline / reactions / coverage queries serve both platforms. Shared durable queue,
-/// redeliveries absorbed by the unique dedupe key - the Kick consumer's shape.
+/// redeliveries absorbed by the unique dedupe key - the Kick consumer's shape, landing-page push included.
 /// </summary>
 public sealed class TwitchLiveTranscriptConsumer : IConsumer<TwitchLiveTranscript>
 {
     private readonly KickGatewayDbContext _db;
+    private readonly HomeFeed _home;
     private readonly ILogger<TwitchLiveTranscriptConsumer> _log;
 
-    public TwitchLiveTranscriptConsumer(KickGatewayDbContext db, ILogger<TwitchLiveTranscriptConsumer> log)
+    public TwitchLiveTranscriptConsumer(KickGatewayDbContext db, HomeFeed home, ILogger<TwitchLiveTranscriptConsumer> log)
     {
         _db = db;
+        _home = home;
         _log = log;
     }
 
@@ -54,7 +57,10 @@ public sealed class TwitchLiveTranscriptConsumer : IConsumer<TwitchLiveTranscrip
         {
             _db.Entry(record).State = EntityState.Detached;
             _log.LogDebug("[twitch:{Login}] transcript {Key} stored concurrently by another replica - ignored", login, record.DedupeKey);
+            return;
         }
+
+        _home.Append(LiveTranscriptConsumer.ToFeedEntry(record));
     }
 
     /// <summary>The Twitch contract in the Kick contract's shape, so one <c>Map</c> keeps the row logic in one place.</summary>

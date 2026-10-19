@@ -2,6 +2,7 @@ using MassTransit;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using TailoredApps.KickGateway.Api.Data;
+using TailoredApps.KickGateway.Api.LiveFeed;
 using TailoredApps.KickGateway.Contracts.Realtime.Media;
 
 namespace TailoredApps.KickGateway.Api.Transcripts;
@@ -11,18 +12,21 @@ namespace TailoredApps.KickGateway.Api.Transcripts;
 /// <see cref="KickGatewayDbContext.LiveTranscripts"/>. Runs on a shared durable queue (competing
 /// consumers across Api replicas), so each transcript is stored once; broker redeliveries are
 /// absorbed by <see cref="LiveTranscriptRecord.DedupeKey"/> (checked first, and enforced by a unique
-/// index for the race between two replicas).
+/// index for the race between two replicas). A stored slice is also shown on the public landing page
+/// (<see cref="HomeFeed"/>) - by this replica only, which is what "best-effort" means there.
 /// </summary>
 public sealed class LiveTranscriptConsumer : IConsumer<LiveTranscript>
 {
     private const int MaxTextLength = 4000;
 
     private readonly KickGatewayDbContext _db;
+    private readonly HomeFeed _home;
     private readonly ILogger<LiveTranscriptConsumer> _log;
 
-    public LiveTranscriptConsumer(KickGatewayDbContext db, ILogger<LiveTranscriptConsumer> log)
+    public LiveTranscriptConsumer(KickGatewayDbContext db, HomeFeed home, ILogger<LiveTranscriptConsumer> log)
     {
         _db = db;
+        _home = home;
         _log = log;
     }
 
@@ -55,7 +59,10 @@ public sealed class LiveTranscriptConsumer : IConsumer<LiveTranscript>
         {
             _db.Entry(record).State = EntityState.Detached;
             _log.LogDebug("[{Slug}] transcript {Key} stored concurrently by another replica — ignored", slug, record.DedupeKey);
+            return;
         }
+
+        _home.Append(ToFeedEntry(record));
     }
 
     /// <summary>Contract → row. Public so tests and backfills can reuse the exact mapping.</summary>
@@ -89,6 +96,17 @@ public sealed class LiveTranscriptConsumer : IConsumer<LiveTranscript>
             ReceivedAt = DateTime.UtcNow,
         };
     }
+
+    /// <summary>A stored slice as the landing page shows it: the channel "speaks", the language is its badge.</summary>
+    public static HomeFeedEntry ToFeedEntry(LiveTranscriptRecord record) => new(
+        HomeFeedKind.Transcript,
+        record.Platform,
+        record.ChannelSlug,
+        record.ChannelSlug,
+        record.Language.Length > 0 ? [record.Language] : [],
+        record.Text,
+        null,
+        record.DedupeKey);
 
     /// <summary>Language codes are stored lowercase and clipped to the column (Whisper ids are 2–3 letters).</summary>
     private static string? Code(string? language)

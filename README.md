@@ -140,6 +140,12 @@ dotnet run --project src/TailoredApps.KickGateway.Api
 dotnet run --project src/TailoredApps.KickGateway.Worker
 ```
 
+Open `https://localhost:5001/`: the public landing page shows the last 10 chat messages
+and transcript slices from every channel (each for 10 s), how many messages and
+transcripts are stored, and a per-minute load chart for the last 8 minutes - no
+sign-in, like `/obs/clips`. `/help` has the getting-started notes below (it is also the
+admin dashboard at `/admin`).
+
 Open `https://localhost:5001/admin`:
 
 1. **Clients** — paste ClientId / Secret / RedirectUri (the one set in the
