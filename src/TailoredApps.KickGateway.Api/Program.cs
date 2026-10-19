@@ -17,6 +17,7 @@ using TailoredApps.KickGateway.Contracts;
 using TailoredApps.KickGateway.Contracts.Channels;
 using TailoredApps.KickGateway.Contracts.Events;
 using TailoredApps.KickGateway.Api.Transcripts;
+using TailoredApps.KickGateway.Contracts.Realtime;
 using TailoredApps.KickGateway.Contracts.Realtime.Media;
 using TailoredApps.Integrations.Twitch;
 using TailoredApps.TwitchGateway.Contracts;
@@ -100,6 +101,10 @@ builder.Services.AddHostedService<ChatProjectionService>();
 // both consumed by LiveFeedConsumer below.
 builder.Services.AddSingleton<LiveEventBuffer>();
 builder.Services.AddSingleton<BroadcasterClientResolver>();
+// Public landing page (/): the last 10 chat messages / transcript slices across every platform + per-minute
+// counters (in memory, per replica) and the cached row counts of ChatMessages / LiveTranscripts.
+builder.Services.AddSingleton<HomeFeed>();
+builder.Services.AddSingleton<StoredTotals>();
 
 // === MassTransit + RabbitMQ + EF outbox + live-feed consumer ===
 // The Api process is the publisher (outbox→RabbitMQ) AND a fan-out subscriber
@@ -125,6 +130,7 @@ builder.Services.AddMassTransit(x =>
 
     x.SetKebabCaseEndpointNameFormatter();
     x.AddConsumer<LiveFeedConsumer>();
+    x.AddConsumer<RealtimeLiveFeedConsumer>();
     x.AddConsumer<ChannelStatsConsumer>();
     x.AddConsumer<ChannelVideosConsumer>();
     x.AddConsumer<LiveTranscriptConsumer>();
@@ -151,6 +157,10 @@ builder.Services.AddMassTransit(x =>
         // transcripts, but the publish topology must match the transcriber so the exchange
         // is a slug-routed topic and BindLiveTranscript below binds to the right thing.
         KickMediaTopology.ConfigurePublishTopology(cfg);
+
+        // Realtime (Pusher) family: the Api only taps RealtimeChatMessage for the landing page, but the
+        // exchange must be declared the way the listener publishes it (slug-routed topic) for the Bind below.
+        KickRealtimeTopology.ConfigurePublishTopology(cfg);
 
         // Twitch families: declared here for the same reason (the Api only consumes them, but the
         // exchanges must be login-routed topics for the Bind helpers below).
@@ -182,6 +192,17 @@ builder.Services.AddMassTransit(x =>
             KickEventTopology.BindKickEvent<KickEventUnknown>(e);
 
             e.ConfigureConsumer<LiveFeedConsumer>(ctx);
+        });
+
+        // Realtime chat tap for the landing page: same shape as the live-feed queue above (per replica,
+        // auto-delete, every channel). Chat from channels the realtime listener follows without a webhook
+        // broadcaster only ever reaches the page through here.
+        cfg.ReceiveEndpoint($"kickgateway-api-realtime-livefeed-{hostSuffix}", e =>
+        {
+            e.AutoDelete = true;
+            e.Durable = false;
+            KickRealtimeTopology.BindKickRealtimeEvent<RealtimeChatMessage>(e);
+            e.ConfigureConsumer<RealtimeLiveFeedConsumer>(ctx);
         });
 
         // On-demand channel statistics. A SHARED durable queue (competing consumers

@@ -329,6 +329,16 @@ Status: actively developed.
   unique per platform). Non-SuperAdmin analytics scopes are built from Kick broadcasters, so Twitch channels
   are SuperAdmin / API-key only. Kick's realtime listener got the matching switch (`kick-realtime` profile,
   `KICK_REALTIME_ENABLED=false` stops it); clips-fetcher is not behind it because the Api needs it.
+- **The landing page is a per-process tap, never a query over the chat tables.** `/` (public, like
+  `/obs/clips`) shows the last 10 chat messages / transcript slices across both platforms, each for
+  10 s, plus a per-minute "load" chart (last 8 minutes). All of it comes from `HomeFeed`
+  (`Api/LiveFeed`), an in-memory singleton fed by the Api's own bus taps - the webhook live-feed
+  consumer, a second per-replica auto-delete queue on `RealtimeChatMessage`, the Twitch tap - and by
+  the transcript consumers after a successful store. A Kick message seen on both transports is
+  collapsed on its message id (`HomeFeed.ChatKey`). Counters start empty on every restart and are
+  per replica. The two "stored" totals come from `StoredTotals`: `sys.partitions` row counts
+  (instant) cached 5 s, never `COUNT(*)` on a public, polled page. Razor reserves the `<text>` tag,
+  so SVG labels in `Home.razor` go through a `MarkupString` helper.
 
 ## Testing
 

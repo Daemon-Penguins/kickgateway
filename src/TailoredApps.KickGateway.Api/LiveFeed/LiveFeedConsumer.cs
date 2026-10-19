@@ -1,4 +1,5 @@
 using MassTransit;
+using TailoredApps.KickGateway.Api.Data;
 using TailoredApps.KickGateway.Contracts;
 using TailoredApps.KickGateway.Contracts.Events;
 using TailoredApps.KickGateway.Telemetry;
@@ -9,6 +10,7 @@ namespace TailoredApps.KickGateway.Api.LiveFeed;
 /// MassTransit consumer registered on a per-API-process queue. Receives every
 /// published contract, looks up the broadcaster's client app, and pushes a
 /// <see cref="LiveEvent"/> into the in-memory buffer the admin UI reads from.
+/// Chat messages additionally go to the public landing page's <see cref="HomeFeed"/>.
 ///
 /// One class implementing 11 IConsumer<T> interfaces — MassTransit binds the
 /// shared queue to each contract's exchange so this consumer sees the firehose.
@@ -28,16 +30,33 @@ public sealed class LiveFeedConsumer :
 {
     private readonly LiveEventBuffer _buffer;
     private readonly BroadcasterClientResolver _resolver;
+    private readonly HomeFeed _home;
 
-    public LiveFeedConsumer(LiveEventBuffer buffer, BroadcasterClientResolver resolver)
+    public LiveFeedConsumer(LiveEventBuffer buffer, BroadcasterClientResolver resolver, HomeFeed home)
     {
         _buffer = buffer;
         _resolver = resolver;
+        _home = home;
     }
 
-    public Task Consume(ConsumeContext<ChatMessageSent> ctx) =>
-        Push(ctx.Message, "chat.message.sent",
-             $"{Trim(ctx.Message.SenderUsername, 30)}: {Trim(ctx.Message.Content, 120)}");
+    public Task Consume(ConsumeContext<ChatMessageSent> ctx)
+    {
+        var m = ctx.Message;
+        // The landing page shows chat from every channel. A channel followed by the realtime listener too
+        // delivers the same message on the realtime tap; the feed collapses them on Kick's message id.
+        _home.Append(new HomeFeedEntry(
+            HomeFeedKind.Chat,
+            ChatPlatforms.Kick,
+            m.BroadcasterSlug,
+            m.SenderUsername,
+            ChatBadgeLabels.FromKick(m.SenderBadges),
+            m.Content,
+            m.SenderIdentityColor,
+            HomeFeed.ChatKey(ChatPlatforms.Kick, m.MessageId)));
+
+        return Push(m, "chat.message.sent",
+             $"{Trim(m.SenderUsername, 30)}: {Trim(m.Content, 120)}");
+    }
 
     public Task Consume(ConsumeContext<ChannelFollowed> ctx) =>
         Push(ctx.Message, "channel.followed",

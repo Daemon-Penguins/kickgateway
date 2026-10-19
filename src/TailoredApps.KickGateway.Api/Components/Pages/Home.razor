@@ -1,0 +1,299 @@
+@page "/"
+@implements IAsyncDisposable
+@using System.Globalization
+@using TailoredApps.KickGateway.Api.LiveFeed
+@inject HomeFeed Feed
+@inject StoredTotals Totals
+
+<PageTitle>Kick Gateway - Kick &amp; Twitch stream data aggregator and MCP server</PageTitle>
+
+<style>
+    .hero h1 { margin-bottom: 0.4rem; }
+    .hero .lead { color: #9aa4b6; max-width: 56rem; margin-top: 0; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1.2rem; margin-bottom: 1.2rem; }
+    .stat { margin-bottom: 0; }
+    .stat-label { display: block; color: #9aa4b6; font-size: 0.85rem; }
+    .stat-value { display: block; color: #fff; font-size: 2rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
+    .stat-sub { display: block; color: #6b7689; font-size: 0.75rem; margin-top: 0.2rem; }
+    .home-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1.2rem; align-items: start; }
+    .home-grid .card { margin-bottom: 0; min-width: 0; }
+    .feed { list-style: none; margin: 0; padding: 0; min-height: 12rem; }
+    .feed-item { padding: 0.45rem 0; border-bottom: 1px solid #2a3140; font-size: 0.9rem; line-height: 1.45; word-break: break-word; overflow-wrap: anywhere;
+                 animation: feed-life @(DisplaySeconds)s linear forwards; }
+    .feed-item:last-child { border-bottom: none; }
+    .feed-item .chan { color: #6b7689; font-size: 0.78rem; margin-right: 0.35rem; }
+    .feed-item .user { color: #cdd6ff; }
+    .feed-item .pill { margin-right: 0.3rem; vertical-align: 0.1em; }
+    .feed-item .pill.badge { margin-left: 0.25rem; margin-right: 0; }
+    .feed-item .pill.plat.kick { background: #1e4d2e; color: #b3f0c0; }
+    .feed-item .pill.plat.twitch { background: #3b2a5e; color: #d9c6ff; }
+    .feed-item .pill.speech { background: #4a3a1e; color: #ffe0a3; }
+    .feed-item.speech .text { font-style: italic; color: #d7dbe3; }
+    .feed-item .colon { margin-right: 0.3rem; color: #9aa4b6; }
+    .feed-empty { color: #6b7689; font-size: 0.85rem; padding: 1rem 0; }
+    .chart-wrap { position: relative; }
+    .chart-wrap svg { display: block; width: 100%; height: auto; }
+    .chart-tip { position: absolute; top: 0; transform: translateX(-50%); background: #1f2530; border: 1px solid #2a3140; border-radius: 4px;
+                 padding: 0.25rem 0.5rem; font-size: 0.75rem; color: #e6e9ef; white-space: nowrap; pointer-events: none; }
+    .chart-tip .muted { font-size: 0.7rem; }
+    @@keyframes feed-life { 0% { opacity: 0; transform: translateY(-4px); } 4% { opacity: 1; transform: none; } 80% { opacity: 1; } 100% { opacity: 0; } }
+    @@media (max-width: 860px) { .home-grid { grid-template-columns: minmax(0, 1fr); } }
+    @@media (prefers-reduced-motion: reduce) { .feed-item { animation: none; } }
+</style>
+
+<section class="hero">
+    <h1>Kick &amp; Twitch stream data aggregator and MCP server</h1>
+    <p class="lead">
+        Chat, channel events and live speech-to-text from Kick and Twitch streams, ingested once and republished as
+        typed contracts over RabbitMQ, stored for chat analytics and served to AI assistants through an MCP server.
+        See <a href="/help">Help</a> for the admin panel and the webhook receiver.
+    </p>
+</section>
+
+<div class="stats">
+    <div class="card stat">
+        <span class="stat-label">Chat messages stored</span>
+        <span class="stat-value">@Fmt(_totals?.ChatMessages)</span>
+        <span class="stat-sub">Kick + Twitch, all channels</span>
+    </div>
+    <div class="card stat">
+        <span class="stat-label">Transcripts stored</span>
+        <span class="stat-value">@Fmt(_totals?.Transcripts)</span>
+        <span class="stat-sub">slices of live speech-to-text</span>
+    </div>
+</div>
+
+<div class="home-grid">
+    <div class="card">
+        <h3>Live now</h3>
+        <p class="muted">The last @HomeFeed.Capacity chat messages and transcript slices from every channel on both platforms. Each line stays for @DisplaySeconds seconds.</p>
+        @if (_shown.Count == 0)
+        {
+            <p class="feed-empty">Quiet right now. Lines appear here the moment a followed channel chats or speaks.</p>
+        }
+        else
+        {
+            <ul class="feed">
+                @foreach (var s in _shown)
+                {
+                    var e = s.Item.Entry;
+                    <li class="feed-item @(e.Kind == HomeFeedKind.Transcript ? "speech" : "chat")" @key="s.Item.Id" style="@s.Style">
+                        <span class="pill plat @e.Platform">@e.Platform</span><span class="chan">#@e.Channel</span>
+                        @if (e.Kind == HomeFeedKind.Transcript)
+                        {
+                            <span class="pill speech" title="live speech-to-text of the stream's audio">speech</span>
+                        }
+                        <strong class="user" style="@UserStyle(e)">@e.Username</strong>@foreach (var b in e.Badges)
+                        {
+                            <span class="pill badge">@b</span>
+                        }<span class="colon">:</span><span class="text">@HomeFeedText.Display(e.Text)</span>
+                    </li>
+                }
+            </ul>
+        }
+    </div>
+
+    <div class="card">
+        <h3>Load</h3>
+        <p class="muted">Chat messages stored per minute over the last @LoadMinutes minutes (UTC). The right-most bar is the current minute, still filling.</p>
+        <div class="chart-wrap">
+            <svg viewBox="0 0 @Inv(W) @Inv(H)" role="img" aria-label="Chat messages stored per minute, last @LoadMinutes minutes">
+                @foreach (var tick in Ticks())
+                {
+                    <line x1="@Inv(L)" x2="@Inv(W - R)" y1="@Inv(Y(tick))" y2="@Inv(Y(tick))" stroke="#2a3140" stroke-width="1" />
+                    @SvgText(L - 6, Y(tick) + 4, "end", "#6b7689", Compact(tick))
+                }
+                <line x1="@Inv(L)" x2="@Inv(W - R)" y1="@Inv(T + PlotH)" y2="@Inv(T + PlotH)" stroke="#3a4152" stroke-width="1" />
+                @for (var i = 0; i < _load.Count; i++)
+                {
+                    var idx = i;
+                    var m = _load[i];
+                    var current = i == _load.Count - 1;
+                    var hovered = _hover == i;
+                    <path d="@BarPath(i, m.Messages)" fill="#3987e5" fill-opacity="@(current ? (hovered ? "0.75" : "0.55") : (hovered ? "1" : "0.9"))" />
+                    @if (m.Messages > 0 && (current || i == _maxIndex))
+                    {
+                        @SvgText(BarX(i) + BarW / 2, Y(m.Messages) - 6, "middle", "#e6e9ef", Compact(m.Messages))
+                    }
+                    @SvgText(BarX(i) + BarW / 2, H - 10, "middle", current ? "#9aa4b6" : "#6b7689", m.Minute.ToString("HH:mm"))
+                    <rect x="@Inv(L + Slot * i)" y="@Inv(T)" width="@Inv(Slot)" height="@Inv(PlotH)" fill="transparent"
+                          @onmouseenter="() => _hover = idx" @onmouseleave="() => _hover = null" />
+                }
+            </svg>
+            @if (_hover is { } h && h < _load.Count)
+            {
+                <div class="chart-tip" style="@TipStyle(h)">
+                    <strong>@_load[h].Minute.ToString("HH:mm") UTC</strong>@(h == _load.Count - 1 ? " (now)" : "")<br />
+                    @_load[h].Messages @(_load[h].Messages == 1 ? "message" : "messages")
+                    <span class="muted">&middot; @_load[h].Transcripts @(_load[h].Transcripts == 1 ? "transcript" : "transcripts")</span>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    /// <summary>How long one line stays on the page after it arrived.</summary>
+    const int DisplaySeconds = 10;
+    /// <summary>History shown by the load chart.</summary>
+    const int LoadMinutes = 8;
+    static readonly TimeSpan TotalsRefresh = TimeSpan.FromSeconds(10);
+
+    // Chart geometry in viewBox units (the SVG scales to the card). Bars are 24 units wide at most (never the
+    // whole slot), 4-unit rounded caps, square at the baseline.
+    const double W = 640, H = 220, L = 44, R = 12, T = 26, B = 30, BarW = 24;
+    static double PlotW => W - L - R;
+    static double PlotH => H - T - B;
+    static double Slot => PlotW / LoadMinutes;
+
+    /// <summary>An item on screen with the CSS computed once at insertion (changing animation-delay would restart the fade).</summary>
+    sealed record Shown(HomeFeedItem Item, string Style);
+
+    readonly List<Shown> _shown = new();
+    IReadOnlyList<MinuteLoad> _load = Array.Empty<MinuteLoad>();
+    StoredCounts? _totals;
+    DateTime _totalsAt;
+    int _yMax = 4, _yStep = 1, _maxIndex = -1;
+    int? _hover;
+    IDisposable? _sub;
+    CancellationTokenSource? _cts;
+    Task? _loop;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var now = DateTime.UtcNow;
+        foreach (var item in Feed.Snapshot().Where(i => Age(i, now) < DisplaySeconds)) _shown.Add(Show(item, now));
+        SetLoad(Feed.Load(LoadMinutes));
+        _totals = await Totals.GetAsync();
+        _totalsAt = now;
+
+        // Hop onto the renderer's sync context: the callback runs on the MassTransit consumer thread.
+        _sub = Feed.Subscribe(item => _ = InvokeAsync(() =>
+        {
+            _shown.Insert(0, Show(item, DateTime.UtcNow));
+            while (_shown.Count > HomeFeed.Capacity) _shown.RemoveAt(_shown.Count - 1);
+            SetLoad(Feed.Load(LoadMinutes));
+            StateHasChanged();
+        }));
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (!firstRender) return;   // not during prerender: the ticking starts with the interactive circuit
+        _cts = new CancellationTokenSource();
+        _loop = TickAsync(_cts.Token);
+    }
+
+    async Task TickAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                var now = DateTime.UtcNow;
+                if (now - _totalsAt >= TotalsRefresh)
+                {
+                    _totals = await Totals.GetAsync(ct) ?? _totals;
+                    _totalsAt = now;
+                }
+                await InvokeAsync(() =>
+                {
+                    _shown.RemoveAll(s => Age(s.Item, now) >= DisplaySeconds);
+                    SetLoad(Feed.Load(LoadMinutes));
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    static double Age(HomeFeedItem item, DateTime now) => Math.Max(0, (now - item.At).TotalSeconds);
+
+    static Shown Show(HomeFeedItem item, DateTime now) =>
+        new(item, $"animation-delay:-{Age(item, now).ToString("0.#", CultureInfo.InvariantCulture)}s");
+
+    static string? UserStyle(HomeFeedEntry e) =>
+        HomeFeedText.CssColor(e.Color) is { } c ? $"color:{c}" : null;
+
+    static string Fmt(long? n) => n?.ToString("N0", CultureInfo.InvariantCulture) ?? "–";
+
+    void SetLoad(IReadOnlyList<MinuteLoad> load)
+    {
+        _load = load;
+        var max = 0;
+        _maxIndex = -1;
+        for (var i = 0; i < load.Count; i++)
+        {
+            if (load[i].Messages > max) { max = load[i].Messages; _maxIndex = i; }
+        }
+        _yStep = NiceStep(max / 4.0);
+        _yMax = Math.Max((int)Math.Ceiling(max / (double)_yStep) * _yStep, 4 * _yStep);
+    }
+
+    /// <summary>1-2-5 series step so the y ticks are round numbers.</summary>
+    static int NiceStep(double raw)
+    {
+        if (raw <= 1) return 1;
+        var magnitude = Math.Pow(10, Math.Floor(Math.Log10(raw)));
+        var r = raw / magnitude;
+        var nice = r <= 1 ? 1 : r <= 2 ? 2 : r <= 5 ? 5 : 10;
+        return (int)(nice * magnitude);
+    }
+
+    IEnumerable<int> Ticks()
+    {
+        for (var v = 0; v <= _yMax; v += _yStep) yield return v;
+    }
+
+    static double BarX(int i) => L + Slot * i + (Slot - BarW) / 2;
+    double Y(int value) => T + PlotH - PlotH * value / _yMax;
+
+    string BarPath(int i, int value)
+    {
+        if (value <= 0) return "";
+        var x = BarX(i);
+        var top = Y(value);
+        var baseline = T + PlotH;
+        var r = Math.Min(4, (baseline - top) / 2);
+        return FormattableString.Invariant(
+            $"M{x:0.##},{baseline:0.##} V{top + r:0.##} Q{x:0.##},{top:0.##} {x + r:0.##},{top:0.##} H{x + BarW - r:0.##} Q{x + BarW:0.##},{top:0.##} {x + BarW:0.##},{top + r:0.##} V{baseline:0.##} Z");
+    }
+
+    static string Inv(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+
+    /// <summary>Tooltip centred on the bar, except at the edges where it would leave the card: there it hugs the edge.</summary>
+    static string TipStyle(int i) => i switch
+    {
+        <= 1 => "left:0;transform:none",
+        >= LoadMinutes - 2 => "right:0;transform:none",
+        _ => $"left:{Inv((BarX(i) + BarW / 2) / W * 100)}%",
+    };
+
+    /// <summary>Razor reserves the &lt;text&gt; tag, so SVG labels are emitted as markup (content HTML-encoded).</summary>
+    static MarkupString SvgText(double x, double y, string anchor, string fill, string content) => new(
+        $"<text x=\"{Inv(x)}\" y=\"{Inv(y)}\" text-anchor=\"{anchor}\" font-size=\"11\" fill=\"{fill}\">{System.Net.WebUtility.HtmlEncode(content)}</text>");
+
+    /// <summary>Axis / cap labels: compact from 1,000 up (1.2K, 3M).</summary>
+    static string Compact(int v) => v switch
+    {
+        >= 1_000_000 => (v / 1_000_000.0).ToString("0.#", CultureInfo.InvariantCulture) + "M",
+        >= 1_000 => (v / 1_000.0).ToString("0.#", CultureInfo.InvariantCulture) + "K",
+        _ => v.ToString(CultureInfo.InvariantCulture),
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        _sub?.Dispose();
+        if (_cts is not null)
+        {
+            _cts.Cancel();
+            if (_loop is not null)
+            {
+                try { await _loop; } catch { /* cancelled */ }
+            }
+            _cts.Dispose();
+        }
+    }
+}

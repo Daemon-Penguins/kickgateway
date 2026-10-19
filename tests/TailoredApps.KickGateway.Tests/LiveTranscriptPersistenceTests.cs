@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using TailoredApps.KickGateway.Api.Analytics;
 using TailoredApps.KickGateway.Api.Data;
+using TailoredApps.KickGateway.Api.LiveFeed;
 using TailoredApps.KickGateway.Api.Transcripts;
 using TailoredApps.KickGateway.Contracts.Realtime.Media;
 using Xunit;
@@ -52,6 +53,7 @@ public class LiveTranscriptPersistenceTests(ChatAnalyticsDatabase fixture) : ICl
 
         var services = new ServiceCollection();
         services.AddLogging();
+        services.AddSingleton<HomeFeed>();
         services.AddDbContext<KickGatewayDbContext>(o => o.UseSqlServer(cs));
         services.AddMassTransitTestHarness(x => x.AddConsumer<LiveTranscriptConsumer>());
         await using var provider = services.BuildServiceProvider(validateScopes: true);
