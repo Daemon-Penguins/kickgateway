@@ -1,9 +1,16 @@
 @page "/"
 @implements IAsyncDisposable
 @using System.Globalization
+@using Microsoft.AspNetCore.Hosting
+@using Microsoft.AspNetCore.WebUtilities
+@using Microsoft.JSInterop
 @using TailoredApps.KickGateway.Api.LiveFeed
 @inject HomeFeed Feed
 @inject StoredTotals Totals
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+@inject IWebHostEnvironment Env
+@inject ILogger<Home> Logger
 
 <PageTitle>Kick Gateway - Kick &amp; Twitch stream data aggregator and MCP server</PageTitle>
 
@@ -36,9 +43,14 @@
     .chart-tip { position: absolute; top: 0; transform: translateX(-50%); background: #1f2530; border: 1px solid #2a3140; border-radius: 4px;
                  padding: 0.25rem 0.5rem; font-size: 0.75rem; color: #e6e9ef; white-space: nowrap; pointer-events: none; }
     .chart-tip .muted { font-size: 0.7rem; }
+    .milestone { background: linear-gradient(90deg, #1e4d2e, #3b2a5e); border: 1px solid #4f6df0; border-radius: 8px; padding: 0.8rem 1.2rem;
+                 margin-bottom: 1.2rem; font-size: 1.05rem; color: #fff; animation: milestone-in 0.5s ease-out; }
+    .stat.celebrate .stat-value { color: #ffe0a3; transform-origin: left center; animation: stat-pulse 1s ease-in-out 4; }
     @@keyframes feed-life { 0% { opacity: 0; transform: translateY(-4px); } 4% { opacity: 1; transform: none; } 80% { opacity: 1; } 100% { opacity: 0; } }
+    @@keyframes milestone-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+    @@keyframes stat-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.08); } }
     @@media (max-width: 860px) { .home-grid { grid-template-columns: minmax(0, 1fr); } }
-    @@media (prefers-reduced-motion: reduce) { .feed-item { animation: none; } }
+    @@media (prefers-reduced-motion: reduce) { .feed-item, .milestone, .stat.celebrate .stat-value { animation: none; } }
 </style>
 
 <section class="hero">
@@ -50,8 +62,15 @@
     </p>
 </section>
 
+@if (_milestone is { } milestone)
+{
+    <div class="milestone" role="status">
+        &#127881; <strong>@milestone.ToString("N0", CultureInfo.InvariantCulture)</strong> chat messages stored. Thank you, chat!
+    </div>
+}
+
 <div class="stats">
-    <div class="card stat">
+    <div class="card stat @(_milestone is not null ? "celebrate" : "")">
         <span class="stat-label">Chat messages stored</span>
         <span class="stat-value">@Fmt(_totals?.ChatMessages)</span>
         <span class="stat-sub">Kick + Twitch, all channels</span>
@@ -159,6 +178,14 @@
     CancellationTokenSource? _cts;
     Task? _loop;
 
+    // Million-message milestones: the highest Milestones.Reached index seen (-1 until the first successful totals
+    // read sets the baseline), the milestone whose banner is up, and the confetti JS module (loaded on first use).
+    static readonly TimeSpan MilestoneBanner = TimeSpan.FromSeconds(12);
+    long _highestReached = -1;
+    long? _milestone;
+    DateTime _milestoneAt;
+    IJSObjectReference? _confetti;
+
     protected override async Task OnInitializedAsync()
     {
         var now = DateTime.UtcNow;
@@ -166,6 +193,7 @@
         SetLoad(Feed.Load(LoadMinutes));
         _totals = await Totals.GetAsync();
         _totalsAt = now;
+        if (_totals is not null) _highestReached = Milestones.Reached(_totals.ChatMessages);   // baseline: opening the page never fires
 
         // Hop onto the renderer's sync context: the callback runs on the MassTransit consumer thread.
         _sub = Feed.Subscribe(item => _ = InvokeAsync(() =>
@@ -182,6 +210,10 @@
         if (!firstRender) return;   // not during prerender: the ticking starts with the interactive circuit
         _cts = new CancellationTokenSource();
         _loop = TickAsync(_cts.Token);
+
+        // Development only: /?celebrate=2000000 fires the milestone on load, so the confetti can be looked at
+        // without a million rows. Not mapped to anything outside Development.
+        if (Env.IsDevelopment() && DevMilestone() is { } forced) _ = CelebrateAsync(forced, _cts.Token);
     }
 
     async Task TickAsync(CancellationToken ct)
@@ -192,17 +224,26 @@
             while (await timer.WaitForNextTickAsync(ct))
             {
                 var now = DateTime.UtcNow;
+                long crossed = 0;
                 if (now - _totalsAt >= TotalsRefresh)
                 {
                     _totals = await Totals.GetAsync(ct) ?? _totals;
                     _totalsAt = now;
+                    if (_totals is not null)
+                    {
+                        if (_highestReached < 0) _highestReached = Milestones.Reached(_totals.ChatMessages);
+                        else if ((crossed = Milestones.Crossed(_highestReached, _totals.ChatMessages)) > 0)
+                            _highestReached = Milestones.Reached(_totals.ChatMessages);
+                    }
                 }
                 await InvokeAsync(() =>
                 {
                     _shown.RemoveAll(s => Age(s.Item, now) >= DisplaySeconds);
                     SetLoad(Feed.Load(LoadMinutes));
+                    if (_milestone is not null && now - _milestoneAt >= MilestoneBanner) _milestone = null;
                     StateHasChanged();
                 });
+                if (crossed > 0) await CelebrateAsync(crossed, ct);
             }
         }
         catch (OperationCanceledException) { }
@@ -218,6 +259,34 @@
         HomeFeedText.CssColor(e.Color) is { } c ? $"color:{c}" : null;
 
     static string Fmt(long? n) => n?.ToString("N0", CultureInfo.InvariantCulture) ?? "–";
+
+    /// <summary>Banner + stat pulse on the renderer, confetti through the JS module (loaded on first use).</summary>
+    async Task CelebrateAsync(long milestone, CancellationToken ct)
+    {
+        await InvokeAsync(() =>
+        {
+            _milestone = milestone;
+            _milestoneAt = DateTime.UtcNow;
+            StateHasChanged();
+        });
+        try
+        {
+            _confetti ??= await JS.InvokeAsync<IJSObjectReference>("import", ct, "./landing/confetti.js");
+            await _confetti.InvokeVoidAsync("burst", ct);
+        }
+        catch (JSDisconnectedException) { }
+        catch (JSException ex)
+        {
+            Logger.LogWarning(ex, "Confetti for the {Milestone} milestone did not run", milestone);
+        }
+    }
+
+    /// <summary>The <c>celebrate</c> query value (a positive number) or null.</summary>
+    long? DevMilestone()
+    {
+        var query = QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query);
+        return query.TryGetValue("celebrate", out var raw) && long.TryParse(raw, out var value) && value > 0 ? value : null;
+    }
 
     void SetLoad(IReadOnlyList<MinuteLoad> load)
     {
@@ -294,6 +363,10 @@
                 try { await _loop; } catch { /* cancelled */ }
             }
             _cts.Dispose();
+        }
+        if (_confetti is not null)
+        {
+            try { await _confetti.DisposeAsync(); } catch (JSDisconnectedException) { }
         }
     }
 }

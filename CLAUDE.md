@@ -338,7 +338,11 @@ Status: actively developed.
   collapsed on its message id (`HomeFeed.ChatKey`). Counters start empty on every restart and are
   per replica. The two "stored" totals come from `StoredTotals`: `sys.partitions` row counts
   (instant) cached 5 s, never `COUNT(*)` on a public, polled page. Razor reserves the `<text>` tag,
-  so SVG labels in `Home.razor` go through a `MarkupString` helper.
+  so SVG labels in `Home.razor` go through a `MarkupString` helper. Every full million chat messages
+  is celebrated (banner + confetti from `wwwroot/landing/confetti.js`, a JS module imported on first
+  use): each page compares the milestone index of every totals refresh with the highest it has seen
+  (`Milestones`), the first read only sets the baseline, and the index is monotonic so a wobbling
+  count never fires twice; `/?celebrate=N` previews it in Development only.
 
 ## Testing
 
