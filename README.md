@@ -144,7 +144,7 @@ Open `https://localhost:5001/`: the public landing page shows the last 10 chat m
 and transcript slices from every channel (each for 10 s), how many messages and
 transcripts are stored, and a per-minute load chart for the last 8 minutes - no
 sign-in, like `/obs/clips`. Every full million chat messages gets confetti and a
-banner on every open page (in Development, `/?celebrate=2000000` previews it). `/help` has the getting-started notes below (it is also the
+banner on every open page. `/help` has the getting-started notes below (it is also the
 admin dashboard at `/admin`).
 
 Open `https://localhost:5001/admin`:

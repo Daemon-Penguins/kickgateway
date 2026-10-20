@@ -1,15 +1,11 @@
 @page "/"
 @implements IAsyncDisposable
 @using System.Globalization
-@using Microsoft.AspNetCore.Hosting
-@using Microsoft.AspNetCore.WebUtilities
 @using Microsoft.JSInterop
 @using TailoredApps.KickGateway.Api.LiveFeed
 @inject HomeFeed Feed
 @inject StoredTotals Totals
 @inject IJSRuntime JS
-@inject NavigationManager Nav
-@inject IWebHostEnvironment Env
 @inject ILogger<Home> Logger
 
 <PageTitle>Kick Gateway - Kick &amp; Twitch stream data aggregator and MCP server</PageTitle>
@@ -210,10 +206,6 @@
         if (!firstRender) return;   // not during prerender: the ticking starts with the interactive circuit
         _cts = new CancellationTokenSource();
         _loop = TickAsync(_cts.Token);
-
-        // Development only: /?celebrate=2000000 fires the milestone on load, so the confetti can be looked at
-        // without a million rows. Not mapped to anything outside Development.
-        if (Env.IsDevelopment() && DevMilestone() is { } forced) _ = CelebrateAsync(forced, _cts.Token);
     }
 
     async Task TickAsync(CancellationToken ct)
@@ -279,13 +271,6 @@
         {
             Logger.LogWarning(ex, "Confetti for the {Milestone} milestone did not run", milestone);
         }
-    }
-
-    /// <summary>The <c>celebrate</c> query value (a positive number) or null.</summary>
-    long? DevMilestone()
-    {
-        var query = QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query);
-        return query.TryGetValue("celebrate", out var raw) && long.TryParse(raw, out var value) && value > 0 ? value : null;
     }
 
     void SetLoad(IReadOnlyList<MinuteLoad> load)

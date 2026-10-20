@@ -342,7 +342,7 @@ Status: actively developed.
   is celebrated (banner + confetti from `wwwroot/landing/confetti.js`, a JS module imported on first
   use): each page compares the milestone index of every totals refresh with the highest it has seen
   (`Milestones`), the first read only sets the baseline, and the index is monotonic so a wobbling
-  count never fires twice; `/?celebrate=N` previews it in Development only.
+  count never fires twice.
 
 ## Testing
 
