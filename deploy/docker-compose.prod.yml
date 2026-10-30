@@ -8,6 +8,15 @@
 # hq-config's otel-override-sync drops a docker-compose.override.yml next to it (OTEL_* for every
 # service); an override's `environment` beats our otel.env.
 
+# Every service caps its docker log at 3 x 20 MB. Without it json-file grows forever: on 2026-10-30
+# realtime held 40 GB, twitch-listener 9.2 GB and api 8.8 GB of the VPS disk. Logs also go to Loki
+# over OTLP, so the local copy only has to cover `docker compose logs --tail`.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
 networks:
   default:
     # kickgateway internal — api ↔ worker (service discovery)
@@ -20,6 +29,7 @@ services:
   api:
     image: ${DOCKERHUB_NAMESPACE}/kickgateway-api:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    logging: *default-logging
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
       - ConnectionStrings__KickGateway=${DB_CONNECTION_STRING:-}
@@ -62,6 +72,7 @@ services:
   worker:
     image: ${DOCKERHUB_NAMESPACE}/kickgateway-worker:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - api
     environment:
@@ -87,6 +98,7 @@ services:
     image: ${DOCKERHUB_NAMESPACE}/kickgateway-realtime:${IMAGE_TAG:-latest}
     profiles: ["kick-realtime"]
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - api
     environment:
@@ -125,6 +137,7 @@ services:
   mcp:
     image: ${DOCKERHUB_NAMESPACE}/kickgateway-mcp:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - api
     environment:
@@ -157,6 +170,7 @@ services:
     image: ${DOCKERHUB_NAMESPACE}/kickgateway-subtitles:${IMAGE_TAG:-latest}
     profiles: ["subtitles"]
     restart: unless-stopped
+    logging: *default-logging
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
       - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
@@ -195,6 +209,7 @@ services:
     image: ${DOCKERHUB_NAMESPACE}/kickgateway-translator:${IMAGE_TAG:-latest}
     profiles: ["translator"]
     restart: unless-stopped
+    logging: *default-logging
     environment:
       - DOTNET_ENVIRONMENT=Production
       - RabbitMq__Host=${RABBITMQ_HOST:-rabbitmq}
@@ -231,6 +246,7 @@ services:
     # broker) - two producers would store every sentence twice (DedupeKey is per process).
     profiles: ["transcriber"]
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - api
     cpu_shares: 512
@@ -266,6 +282,7 @@ services:
   clips-fetcher:
     image: ${DOCKERHUB_NAMESPACE}/kickgateway-clips-fetcher:${IMAGE_TAG:-latest}
     restart: unless-stopped
+    logging: *default-logging
     environment:
       - FETCH_SECRET=${CLIPS_FETCHER_SECRET:-}
     networks:
@@ -281,6 +298,7 @@ services:
     image: ${DOCKERHUB_NAMESPACE}/kickgateway-twitch-listener:${IMAGE_TAG:-latest}
     profiles: ["twitch-chat"]
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - api
     environment:
@@ -309,6 +327,7 @@ services:
     image: ${DOCKERHUB_NAMESPACE}/kickgateway-twitch-capture:${IMAGE_TAG:-latest}
     profiles: ["twitch-audio"]
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - api
     environment:
@@ -339,6 +358,7 @@ services:
     image: ${DOCKERHUB_NAMESPACE}/kickgateway-transcriber:${IMAGE_TAG:-latest}
     profiles: ["twitch-transcriber"]
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - api
     cpu_shares: 512
