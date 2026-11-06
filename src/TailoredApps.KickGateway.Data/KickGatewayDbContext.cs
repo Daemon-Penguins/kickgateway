@@ -190,17 +190,24 @@ public class KickGatewayDbContext : DbContext
             b.HasKey(x => x.MessageId);
             // Every pre-Twitch row is Kick; the projectors set the column explicitly from now on.
             b.Property(x => x.Platform).HasDefaultValue(ChatPlatforms.Kick);
-            // Channel windows (overview, graph, transcript).
-            b.HasIndex(x => new { x.ChannelSlug, x.CreatedAt });
+            // Every analytics query filters on Platform (slugs and user ids are only unique per platform), so it
+            // sits right after the equality column of each index - without it each row costs a key lookup into
+            // the clustered index and the aggregates fall back to scanning the table. Changes to these indexes
+            // ship as idempotent SQL (see migration AddPlatformToAnalyticsIndexes), built by hand on prod first.
+            // Channel windows (overview, graph, transcript); counts of replies / distinct chatters covered.
+            b.HasIndex(x => new { x.ChannelSlug, x.Platform, x.CreatedAt })
+                .IncludeProperties(x => new { x.SenderUserId, x.ReplyToMessageId, x.ReplyToUserId });
             // Per-chatter aggregates inside a channel (first seen, new vs returning).
-            b.HasIndex(x => new { x.ChannelSlug, x.SenderUserId, x.CreatedAt });
+            b.HasIndex(x => new { x.ChannelSlug, x.Platform, x.SenderUserId, x.CreatedAt });
             // Per-chatter profile across channels (+ "latest username of id" covered).
-            b.HasIndex(x => new { x.SenderUserId, x.CreatedAt }).IncludeProperties(x => x.SenderUsername);
+            b.HasIndex(x => new { x.SenderUserId, x.Platform, x.CreatedAt }).IncludeProperties(x => new { x.SenderUsername, x.ChannelSlug });
             // Replies received.
-            b.HasIndex(x => new { x.ReplyToUserId, x.CreatedAt });
+            b.HasIndex(x => new { x.ReplyToUserId, x.Platform, x.CreatedAt });
             b.HasIndex(x => x.ReplyToMessageId);
-            // Username → user id resolution + search (covered, latest-first per name).
-            b.HasIndex(x => new { x.SenderUsername, x.CreatedAt }).IncludeProperties(x => x.SenderUserId);
+            // Username → user id resolution (projector + analytics) and search (covered, latest-first per name).
+            b.HasIndex(x => new { x.SenderUsername, x.Platform, x.CreatedAt }).IncludeProperties(x => x.SenderUserId);
+            // Cross-channel windows: channel list, oldest/newest message in /status.
+            b.HasIndex(x => x.CreatedAt).IncludeProperties(x => new { x.Platform, x.ChannelSlug, x.SenderUserId });
             b.HasMany(x => x.Mentions)
                 .WithOne(x => x.Message)
                 .HasForeignKey(x => x.MessageId)
@@ -217,11 +224,13 @@ public class KickGatewayDbContext : DbContext
         {
             b.HasKey(x => x.Id);
             b.Property(x => x.Platform).HasDefaultValue(ChatPlatforms.Kick);
-            b.HasIndex(x => new { x.UserId, x.OccurredAt });
-            b.HasIndex(x => new { x.CounterpartUserId, x.OccurredAt });
-            b.HasIndex(x => new { x.ChannelSlug, x.OccurredAt });
-            // "Was this message deleted?" lookups for transcripts.
-            b.HasIndex(x => x.RefId);
+            // Platform placement: see ChatMessageRecord.
+            b.HasIndex(x => new { x.UserId, x.Platform, x.OccurredAt });
+            b.HasIndex(x => new { x.CounterpartUserId, x.Platform, x.OccurredAt });
+            // Channel windows; the per-kind totals of the overview covered.
+            b.HasIndex(x => new { x.ChannelSlug, x.Platform, x.OccurredAt }).IncludeProperties(x => new { x.Kind, x.Amount, x.RefId });
+            // "Was this message deleted?" lookups (Kind = MessageDeleted AND RefId IN ...).
+            b.HasIndex(x => new { x.RefId, x.Kind }).IncludeProperties(x => x.Platform);
         });
 
         modelBuilder.Entity<AnalyticsCheckpoint>(b => b.HasKey(x => x.Name));
@@ -232,9 +241,10 @@ public class KickGatewayDbContext : DbContext
             b.Property(x => x.Platform).HasDefaultValue(ChatPlatforms.Kick);
             // Redelivery / replica race guard (the consumer checks it first, the index enforces it).
             b.HasIndex(x => x.DedupeKey).IsUnique();
-            // Channel timelines and joins with chat by time window.
-            b.HasIndex(x => new { x.ChannelSlug, x.StartedAt });
-            b.HasIndex(x => new { x.ChannelSlug, x.EndedAt });
+            // Channel timelines and joins with chat by time window (Platform placement: see ChatMessageRecord);
+            // the per-language coverage of /status and the overview covered.
+            b.HasIndex(x => new { x.ChannelSlug, x.Platform, x.StartedAt }).IncludeProperties(x => new { x.AudioSeconds, x.Language, x.Confidence });
+            b.HasIndex(x => new { x.ChannelSlug, x.Platform, x.EndedAt });
         });
 
         modelBuilder.Entity<LiveTranscriptTranslationRecord>(b =>

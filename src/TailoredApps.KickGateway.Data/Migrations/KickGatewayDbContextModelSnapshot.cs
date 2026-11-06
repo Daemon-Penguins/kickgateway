@@ -17,7 +17,7 @@ namespace TailoredApps.KickGateway.Api.Data.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.12")
+                .HasAnnotation("ProductVersion", "10.0.14")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
@@ -411,21 +411,27 @@ namespace TailoredApps.KickGateway.Api.Data.Migrations
 
                     b.HasKey("MessageId");
 
+                    b.HasIndex("CreatedAt");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("CreatedAt"), new[] { "Platform", "ChannelSlug", "SenderUserId" });
+
                     b.HasIndex("ReplyToMessageId");
 
-                    b.HasIndex("ChannelSlug", "CreatedAt");
+                    b.HasIndex("ChannelSlug", "Platform", "CreatedAt");
 
-                    b.HasIndex("ReplyToUserId", "CreatedAt");
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("ChannelSlug", "Platform", "CreatedAt"), new[] { "SenderUserId", "ReplyToMessageId", "ReplyToUserId" });
 
-                    b.HasIndex("SenderUserId", "CreatedAt");
+                    b.HasIndex("ReplyToUserId", "Platform", "CreatedAt");
 
-                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("SenderUserId", "CreatedAt"), new[] { "SenderUsername" });
+                    b.HasIndex("SenderUserId", "Platform", "CreatedAt");
 
-                    b.HasIndex("SenderUsername", "CreatedAt");
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("SenderUserId", "Platform", "CreatedAt"), new[] { "SenderUsername", "ChannelSlug" });
 
-                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("SenderUsername", "CreatedAt"), new[] { "SenderUserId" });
+                    b.HasIndex("SenderUsername", "Platform", "CreatedAt");
 
-                    b.HasIndex("ChannelSlug", "SenderUserId", "CreatedAt");
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("SenderUsername", "Platform", "CreatedAt"), new[] { "SenderUserId" });
+
+                    b.HasIndex("ChannelSlug", "Platform", "SenderUserId", "CreatedAt");
 
                     b.ToTable("ChatMessages");
                 });
@@ -499,13 +505,17 @@ namespace TailoredApps.KickGateway.Api.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("RefId");
+                    b.HasIndex("RefId", "Kind");
 
-                    b.HasIndex("ChannelSlug", "OccurredAt");
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("RefId", "Kind"), new[] { "Platform" });
 
-                    b.HasIndex("CounterpartUserId", "OccurredAt");
+                    b.HasIndex("ChannelSlug", "Platform", "OccurredAt");
 
-                    b.HasIndex("UserId", "OccurredAt");
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("ChannelSlug", "Platform", "OccurredAt"), new[] { "Kind", "Amount", "RefId" });
+
+                    b.HasIndex("CounterpartUserId", "Platform", "OccurredAt");
+
+                    b.HasIndex("UserId", "Platform", "OccurredAt");
 
                     b.ToTable("ChatterEvents");
                 });
@@ -797,9 +807,11 @@ namespace TailoredApps.KickGateway.Api.Data.Migrations
                     b.HasIndex("DedupeKey")
                         .IsUnique();
 
-                    b.HasIndex("ChannelSlug", "EndedAt");
+                    b.HasIndex("ChannelSlug", "Platform", "EndedAt");
 
-                    b.HasIndex("ChannelSlug", "StartedAt");
+                    b.HasIndex("ChannelSlug", "Platform", "StartedAt");
+
+                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("ChannelSlug", "Platform", "StartedAt"), new[] { "AudioSeconds", "Language", "Confidence" });
 
                     b.ToTable("LiveTranscripts");
                 });
