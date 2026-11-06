@@ -243,7 +243,15 @@ Status: actively developed.
   `/api/analytics/*` is read-only and scoped per client-app role; it also accepts
   `Analytics:ApiKey` (Bearer / `X-Api-Key`) — and ONLY those endpoints do. Their queries
   run in a READ UNCOMMITTED transaction (`AnalyticsRequestFilter`) so analytics reads can
-  never block or deadlock the projector / ingest writers; transient DB errors → 503. The
+  never block or deadlock the projector / ingest writers; transient DB errors → 503 (the prod
+  DB also has RCSI on - irrelevant to them, slowness there is plans, not locks). Every analytics
+  query filters on `Platform`, so every index on `ChatMessages` / `ChatterEvents` /
+  `LiveTranscripts` carries it right after its equality column: without it each row in a window
+  is a key lookup and the aggregates scan the table (the `AddTwitchGateway` migration added the
+  column but not to the indexes; channel_overview scanned all of `ChatMessages` until 2026-11-06).
+  Index changes on these tables ship as an idempotent migration (`IF NOT EXISTS` by EF's default
+  name) plus a hand-run script in `deploy/sql/` (ONLINE where the edition allows), run on prod
+  before the deploy - the Api applies migrations at startup. The
   channel timeline (`/channels/{slug}/timeline`, `TimelineQueries`) merges speech (`LiveTranscripts`,
   keyed on `StartedAt` - never `ReceivedAt`, which is the slice's end + inference), `ChatterEvents`
   and `ChatMessages` by stream time with a `(at, kind rank, id)` keyset cursor: at most three
@@ -385,6 +393,7 @@ TailoredApps.KickGateway.slnx
 ├── docker/docker-compose.yml                       # fallback dev infra without Aspire
 ├── docker/clips-fetcher/                           # browser-TLS fetch proxy (clips past Cloudflare)
 ├── deploy/docker-compose.prod.yml                  # production compose, shipped verbatim by deploy.yml (${VAR}s from the server's .env)
+├── deploy/sql/                                     # hand-run DDL for prod (large index builds) - each mirrors an idempotent migration
 ├── deploy/macos/                                   # launchd installer + env template for running the transcriber on a Mac (Metal)
 ├── tests/TailoredApps.KickGateway.Tests/           # xUnit unit tests (+ SQL Server testcontainer integration tests)
 ├── docs/CLIENT-INTEGRATION.md                      # how external clients subscribe

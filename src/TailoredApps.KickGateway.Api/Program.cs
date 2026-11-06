@@ -298,7 +298,12 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<KickGatewayDbContext>();
+    // Index changes on the big analytics tables are built by hand on prod first and their migrations are
+    // idempotent (deploy/sql/). If that step was skipped, the build runs here: with the default 30 s command
+    // timeout it would be rolled back and the Api would crash-loop retrying it, so give migrations room.
+    db.Database.SetCommandTimeout(TimeSpan.FromMinutes(30));
     await db.Database.MigrateAsync();
+    db.Database.SetCommandTimeout(null);
     var dp = scope.ServiceProvider.GetRequiredService<DataProtectionDbContext>();
     await dp.Database.MigrateAsync();
 
