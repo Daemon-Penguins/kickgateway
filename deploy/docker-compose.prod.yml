@@ -47,6 +47,8 @@ services:
       - Seed__SuperAdminUsername=${SEED_SUPERADMIN_USERNAME:-}
       # Optional: API-key access to /api/analytics/* (MCP server). Empty = admin cookie only.
       - Analytics__ApiKey=${ANALYTICS_API_KEY:-}
+      # Inbox purge: Received* rows older than this many days (never ahead of the analytics projector).
+      - InboxRetention__Days=${INBOX_RETENTION_DAYS:-7}
       # Twitch developer application: the /admin/twitch bot-account OAuth + Helix lookups. Empty = Twitch pages show "not configured".
       - Twitch__ClientId=${TWITCH_CLIENT_ID:-}
       - Twitch__ClientSecret=${TWITCH_CLIENT_SECRET:-}

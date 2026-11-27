@@ -11,6 +11,7 @@ using TailoredApps.KickGateway.Api.Components;
 using TailoredApps.KickGateway.Api.Data;
 using TailoredApps.KickGateway.Api.Endpoints;
 using TailoredApps.KickGateway.Api.LiveFeed;
+using TailoredApps.KickGateway.Api.Retention;
 using TailoredApps.KickGateway.Api.Services;
 using TailoredApps.KickGateway.Api.Webhooks;
 using TailoredApps.KickGateway.Contracts;
@@ -95,6 +96,10 @@ builder.Services.AddHostedService<TokenRefreshBackgroundService>();
 builder.Services.Configure<ChatAnalyticsOptions>(builder.Configuration.GetSection(ChatAnalyticsOptions.SectionName));
 builder.Services.AddScoped<ChatAnalyticsService>();
 builder.Services.AddHostedService<ChatProjectionService>();
+
+// === Inbox retention (old Received* rows; never ahead of the projector's checkpoints) ===
+builder.Services.Configure<InboxRetentionOptions>(builder.Configuration.GetSection(InboxRetentionOptions.SectionName));
+builder.Services.AddHostedService<InboxRetentionService>();
 
 // === Live-feed tap services ===
 // Singleton in-memory ring buffer per client + a broadcaster→client resolver,
