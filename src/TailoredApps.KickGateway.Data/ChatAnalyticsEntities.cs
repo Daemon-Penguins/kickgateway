@@ -4,9 +4,9 @@ namespace TailoredApps.KickGateway.Api.Data;
 
 // Chat-analytics read model. Rows here are DERIVED from the two inboxes — ReceivedWebhook.RawBody
 // (signed Kick webhooks) and ReceivedRealtimeEvent.RawData (Pusher frames) — by the Api's
-// ChatProjectionService; they are never written by the ingest hot paths. Everything can be
-// rebuilt: clear these tables + the AnalyticsCheckpoint rows and the projector replays both
-// inboxes from the beginning.
+// ChatProjectionService; they are never written by the ingest hot paths. The inboxes are purged
+// after InboxRetention:Days (InboxRetentionService), so these tables are the only long-term copy:
+// a rebuild can replay just the window the inboxes still hold - see docs/CHAT-ANALYTICS.md.
 
 /// <summary>Which inbox a read-model row was projected from.</summary>
 public enum ChatSource

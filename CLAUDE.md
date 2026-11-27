@@ -230,7 +230,7 @@ Status: actively developed.
   `ChatProjectionService` tails both inboxes (`ReceivedWebhooks.RawBody`,
   `ReceivedRealtimeEvents.RawData`) with keyset checkpoints (`AnalyticsCheckpoints`)
   into `ChatMessages` / `ChatMentions` / `ChatterEvents`; the ingest hot paths never
-  write them, and everything can be rebuilt by clearing those tables + checkpoints.
+  write them. The inboxes are purged after `InboxRetention:Days` (default 7, `InboxRetentionService`, never ahead of a checkpoint), so the read model is the only long-term copy: a rebuild replays just that window - never clear the whole read model on prod (`docs/CHAT-ANALYTICS.md`).
   Chat from both transports merges on Kick's message id (plus a sender+content±5 s
   guard); for channels with an enabled webhook broadcaster, webhooks are authoritative
   for non-chat events and Pusher only adds realtime-only kinds (deletions, unbans).

@@ -43,9 +43,23 @@ ReceivedRealtimeEvents ────┘  (Api, background)     └─ ChatterEven
   The payload's `created_at` is the subscription's start date, repeated on
   every monthly renewal.
 
-**Rebuild** (e.g. after a mapper fix): stop the Api, then
-`DELETE FROM ChatMentions; DELETE FROM ChatMessages; DELETE FROM ChatterEvents; DELETE FROM AnalyticsCheckpoints;`,
-then start it again. The projector replays both inboxes.
+**Inbox retention.** The inboxes are not kept forever: `InboxRetentionService` (Api)
+deletes `ReceivedWebhooks` / `ReceivedRealtimeEvents` / `ReceivedTwitchEvents` rows older
+than `InboxRetention:Days` (default 7, prod `INBOX_RETENTION_DAYS`), hourly, in batches of
+1000. It never deletes ahead of the projector: for every inbox the projector reads, the
+cutoff is clamped to that inbox's checkpoint, and an inbox without a checkpoint is left
+alone. The read model is **not** purged — `ChatMessages` / `ChatterEvents` keep their full
+history; only the raw payloads go. (They were 76 GB of a 126 GB database on 2026-11-27.)
+Deleted rows free space inside the data file, not on disk: the file stops growing; shrink
+it by hand (`DBCC SHRINKFILE`) only if the disk space itself is needed back.
+
+**Rebuild** (e.g. after a mapper fix): the projector can only replay what the inboxes still
+hold, i.e. the last `InboxRetention:Days`. Clearing the whole read model would **lose all
+older history**. Rebuild only the window the inboxes cover: stop the Api, delete the
+read-model rows newer than the oldest remaining inbox row, set the checkpoints back to that
+time, start the Api. A full
+`DELETE FROM ChatMentions; DELETE FROM ChatMessages; DELETE FROM ChatterEvents; DELETE FROM AnalyticsCheckpoints;`
+is only right on a database whose inboxes still reach back to the beginning (dev).
 
 ## Configuration (`Analytics` section on the Api)
 
